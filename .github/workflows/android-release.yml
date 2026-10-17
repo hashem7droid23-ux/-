@@ -1,0 +1,81 @@
+name: Build Android APK & Release
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build Signed APK (Yemen Mobile Balance)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Generate Signing Keystore for Installable Release APK
+        run: |
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey \
+              -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          if [ ! -f "my-upload-key.jks" ]; then
+            keytool -genkey -v -keystore my-upload-key.jks \
+              -storepass android123 -alias upload \
+              -keypass android123 -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Yemen Mobile Balance,O=YemenTelecom,C=YE"
+          fi
+
+      - name: Build Debug & Release APKs
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android123' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android123' }}
+        run: |
+          gradle assembleDebug assembleRelease --no-daemon
+
+      - name: Prepare APK Output Directory
+        run: |
+          mkdir -p release-apks
+          cp app/build/outputs/apk/release/*.apk release-apks/yemen-mobile-balance-release.apk || true
+          cp app/build/outputs/apk/debug/*.apk release-apks/yemen-mobile-balance-debug.apk || true
+          ls -lh release-apks/
+
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yemen-mobile-balance-release-apk
+          path: release-apks/*.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (on Tag or Manual Dispatch)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name == 'main' && format('v2.0.{0}', github.run_number) || github.ref_name }}
+          name: "رصيد يمن موبايل والشبكات اليمنية (${{ github.run_number }})"
+          body: |
+            ### تطبيق رصيد يمن موبايل والشبكات اليمنية 📱🇾🇪
+            - نسخة جاهزة للتثبيت المباشر على الهاتف (`yemen-mobile-balance-release.apk`).
+            - تدعم الاستعلام، التحقق التلقائي عبر OTP، باقات وأكواد يمن موبايل وسبأفون وYOU ويمن نت، الحاسبة الذكية، وسجل العمليات مع التصدير.
+          files: release-apks/*.apk
