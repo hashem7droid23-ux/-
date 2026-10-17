@@ -1,0 +1,6 @@
+{
+  "name": "رصيد يمن موبايل",
+  "description": "تطبيق احترافي للاستعلام عن رصيد وباقات يمن موبايل والشبكات اليمنية (سبأفون، YOU، يمن نت) مع التحقق التلقائي عبر الرسائل، دليل الأكواد السريعة USSD، الحاسبة الذكية، وسجل العمليات القابل للتصدير.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

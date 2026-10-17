@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Golden Shield / Card Frame inside 66dp safe zone (21 to 87) -->
+    <path
+        android:pathData="M36,28h26l12,12v36c0,3.3 -2.7,6 -6,6H36c-3.3,0 -6,-2.7 -6,-6V34c0,-3.3 2.7,-6 6,-6z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="30"
+                android:startY="28"
+                android:endX="74"
+                android:endY="82"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFE082" />
+                <item android:offset="0.5" android:color="#D4AF37" />
+                <item android:offset="1.0" android:color="#B38728" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Inner Maroon SIM Chip Cutout -->
+    <path
+        android:fillColor="#5A001A"
+        android:pathData="M39,46h26c2.2,0 4,1.8 4,4v18c0,2.2 -1.8,4 -4,4H39c-2.2,0 -4,-1.8 -4,-4V50c0,-2.2 1.8,-4 4,-4z" />
+
+    <!-- SIM Circuit Gold Lines -->
+    <path
+        android:fillColor="#FFD54F"
+        android:pathData="M46,46v26h2V46h-2zM56,46v26h2V46h-2zM35,54h34v2H35v-2zM35,62h34v2H35v-2z" />
+
+    <!-- Center Gold Chip Core -->
+    <path
+        android:fillColor="#FFF8E1"
+        android:pathData="M48,53h8v10h-8z" />
+
+    <!-- Signal Waves at Top Right -->
+    <path
+        android:strokeColor="#FFF8E1"
+        android:strokeWidth="2.6"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M66,24c5.5,0 10,4.5 10,10" />
+    <path
+        android:strokeColor="#FFD54F"
+        android:strokeWidth="2.6"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M66,18c8.8,0 16,7.2 16,16" />
+</vector>

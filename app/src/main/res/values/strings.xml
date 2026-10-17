@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">رصيد يمن موبايل</string>
+    <string name="app_subtitle">الاستعلام الذكي وخدمات الشبكات اليمنية</string>
+    <string name="nav_query">الاستعلام</string>
+    <string name="nav_packages">الباقات والأكواد</string>
+    <string name="nav_calculator">الحاسبة الذكية</string>
+    <string name="nav_history">السجل والتقارير</string>
+    <string name="carrier_yemen_mobile">يمن موبايل</string>
+    <string name="carrier_sabafon">سبأفون</string>
+    <string name="carrier_you">YOU يو</string>
+    <string name="carrier_yemen_net">يمن نت و4G</string>
+    <string name="phone_input_label">رقم الهاتف أو المشترك</string>
+    <string name="phone_input_hint">مثال: 771234567</string>
+    <string name="btn_query_portal">استعلام تفصيلي (بوابة OTP)</string>
+    <string name="btn_query_ussd">اتصال سريع USSD</string>
+    <string name="otp_dialog_title">التحقق عبر رمز الرسالة (OTP)</string>
+    <string name="otp_dialog_subtitle">تم إرسال رمز التحقق إلى الرقم المدخل. سيتم التقاطه تلقائياً فور وصول الرسالة أو يمكنك إدخاله يدوياً:</string>
+    <string name="btn_verify_otp">تأكيد الرمز وعرض الرصيد</string>
+    <string name="btn_autofill_demo_otp">تعبئة تلقائية للتجربة السريعة</string>
+    <string name="export_csv_success">تم تجهيز التقرير للمشاركة والتصدير</string>
+    <string name="empty_history_title">لا توجد عمليات استعلام مسجلة بعد</string>
+    <string name="empty_history_subtitle">ابدأ بالاستعلام عن أي رقم ليتم أرشفته هنا تلقائياً مع إمكانية التصدير والمشاركة</string>
+</resources>
