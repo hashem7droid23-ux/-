@@ -1,27 +1,25 @@
 package com.example.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.data.OtpSessionState
+import com.example.LocalTelecomStorage
+import com.example.OtpSessionItem
+import com.example.QueryRecordItem
 import com.example.data.PackageCategory
-import com.example.data.QueryRecordEntity
 import com.example.data.TelecomCarrier
 import com.example.data.TelecomCatalogData
 import com.example.data.TelecomPackage
-import com.example.data.TelecomRepository
 import com.example.data.UssdQuickCode
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.Locale
+import kotlin.math.abs
 
 enum class AppTab(val route: String, val titleAr: String) {
     QUERY("query", "الاستعلام"),
@@ -30,300 +28,301 @@ enum class AppTab(val route: String, val titleAr: String) {
     HISTORY("history", "السجل")
 }
 
-data class TelecomUiState(
-    val currentTab: AppTab = AppTab.QUERY,
-    val selectedCarrier: TelecomCarrier = TelecomCarrier.YEMEN_MOBILE,
-    val phoneInput: String = "777889900",
-    val subscriberLabelInput: String = "",
-    val autoDetectedCarrier: Boolean = false,
-    val isLoading: Boolean = false,
-    val errorMessage: String? = null,
-    val statusBannerMessage: String? = null,
-    // OTP Dialog State
-    val activeOtpSession: OtpSessionState? = null,
-    val otpDigitsInput: String = "",
-    val otpRemainingSeconds: Int = 0,
-    val isAutoSmsListening: Boolean = true,
-    // Result View State
-    val latestResult: QueryRecordEntity? = null,
-    // Packages & USSD Filter State
-    val selectedPackageCategory: PackageCategory = PackageCategory.ALL,
-    val packageSearchQuery: String = "",
-    // Smart Calculator State
-    val calcAmountInput: String = "3000",
-    val calcIsGrossToNet: Boolean = false, // false = I want X net balance, how much to pay? true = I pay X, how much net balance?
-    val calcDataGbInput: String = "5",
-    val calcDaysInput: String = "30",
-    // History Filter State
-    val historySearchQuery: String = "",
-    val historyOnlyFavorites: Boolean = false,
-    val selectedCarrierFilter: TelecomCarrier? = null
-)
-
 class TelecomViewModel(
-    private val repository: TelecomRepository
+    private val storage: LocalTelecomStorage
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(TelecomUiState())
-    val uiState: StateFlow<TelecomUiState> = _uiState.asStateFlow()
+    var isDarkTheme by mutableStateOf(storage.isDarkTheme())
+        private set
 
-    val isDarkTheme: StateFlow<Boolean> = repository.isDarkThemeFlow.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = true
-    )
+    var currentTab by mutableStateOf(AppTab.QUERY)
+        private set
 
-    val allRecords: StateFlow<List<QueryRecordEntity>> = repository.allRecordsFlow.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
+    var selectedCarrier by mutableStateOf(TelecomCarrier.fromId(storage.getDefaultCarrierId()))
+        private set
 
-    val filteredHistoryRecords: StateFlow<List<QueryRecordEntity>> = combine(
-        allRecords,
-        _uiState
-    ) { records, state ->
-        records.filter { rec ->
-            val matchesFav = !state.historyOnlyFavorites || rec.isFavorite
-            val matchesCarrier = state.selectedCarrierFilter == null || rec.carrierId == state.selectedCarrierFilter.id
-            val q = state.historySearchQuery.trim()
+    var phoneInput by mutableStateOf("777889900")
+        private set
+
+    var subscriberLabelInput by mutableStateOf("")
+        private set
+
+    var autoDetectedCarrier by mutableStateOf(false)
+        private set
+
+    var isLoading by mutableStateOf(false)
+        private set
+
+    var errorMessage by mutableStateOf<String?>(null)
+        private set
+
+    var statusBannerMessage by mutableStateOf<String?>(null)
+        private set
+
+    // OTP Dialog State
+    var activeOtpSession by mutableStateOf<OtpSessionItem?>(null)
+        private set
+
+    var otpDigitsInput by mutableStateOf("")
+        private set
+
+    var otpRemainingSeconds by mutableIntStateOf(0)
+        private set
+
+    // Records & Result State
+    var allRecords by mutableStateOf(storage.loadRecords())
+        private set
+
+    var latestResult by mutableStateOf<QueryRecordItem?>(allRecords.firstOrNull())
+        private set
+
+    // Packages & USSD Filter State
+    var selectedPackageCategory by mutableStateOf(PackageCategory.ALL)
+        private set
+
+    var packageSearchQuery by mutableStateOf("")
+        private set
+
+    // Calculator State
+    var calcAmountInput by mutableStateOf("3000")
+        private set
+
+    var calcIsGrossToNet by mutableStateOf(false)
+        private set
+
+    var calcDataGbInput by mutableStateOf("5")
+        private set
+
+    var calcDaysInput by mutableStateOf("30")
+        private set
+
+    // History Filter State
+    var historySearchQuery by mutableStateOf("")
+        private set
+
+    var historyOnlyFavorites by mutableStateOf(false)
+        private set
+
+    var selectedCarrierFilter by mutableStateOf<TelecomCarrier?>(null)
+        private set
+
+    private var otpCountdownJob: Job? = null
+
+    fun selectTab(tab: AppTab) {
+        currentTab = tab
+        errorMessage = null
+        statusBannerMessage = null
+    }
+
+    fun toggleDarkTheme() {
+        val next = !isDarkTheme
+        isDarkTheme = next
+        storage.setDarkTheme(next)
+    }
+
+    fun selectCarrier(carrier: TelecomCarrier) {
+        selectedCarrier = carrier
+        autoDetectedCarrier = false
+        errorMessage = null
+        storage.setDefaultCarrierId(carrier.id)
+    }
+
+    fun updatePhoneInput(newPhone: String) {
+        val filtered = newPhone.filter { it.isDigit() || it == '+' }.take(14)
+        val detected = TelecomCarrier.detectFromPhone(filtered)
+        phoneInput = filtered
+        if (detected != null) {
+            autoDetectedCarrier = detected != selectedCarrier
+            selectedCarrier = detected
+        } else {
+            autoDetectedCarrier = false
+        }
+        errorMessage = null
+    }
+
+    fun updateSubscriberLabelInput(label: String) {
+        subscriberLabelInput = label.take(35)
+    }
+
+    fun initiatePortalBalanceQuery() {
+        val cleanPhone = LocalTelecomStorage.normalizeYemenPhone(phoneInput)
+        val valid = if (selectedCarrier == TelecomCarrier.YEMEN_NET) {
+            cleanPhone.length in 7..9
+        } else {
+            cleanPhone.length == 9 && selectedCarrier.prefixes.any { cleanPhone.startsWith(it) }
+        }
+
+        if (!valid) {
+            errorMessage = "يرجى إدخال رقم صحيح مكون من 9 أرقام يبدأ بـ ${selectedCarrier.prefixes.joinToString(" أو ")}"
+            return
+        }
+
+        isLoading = true
+        errorMessage = null
+        statusBannerMessage = null
+
+        viewModelScope.launch {
+            delay(350)
+            val hashSeed = abs(cleanPhone.hashCode())
+            val otpCode = String.format(Locale.US, "%06d", (hashSeed % 900000) + 100000)
+            val session = OtpSessionItem(
+                phoneNumber = cleanPhone,
+                carrierId = selectedCarrier.id,
+                sessionToken = "YM-${System.currentTimeMillis().toString().takeLast(5)}",
+                generatedOtpCode = otpCode,
+                expiresAtMillis = System.currentTimeMillis() + 120_000L
+            )
+            isLoading = false
+            activeOtpSession = session
+            otpDigitsInput = ""
+            otpRemainingSeconds = 120
+            startOtpTimer(session)
+        }
+    }
+
+    private fun startOtpTimer(session: OtpSessionItem) {
+        otpCountdownJob?.cancel()
+        otpCountdownJob = viewModelScope.launch {
+            delay(1400)
+            if (activeOtpSession?.sessionToken == session.sessionToken && otpDigitsInput.isEmpty()) {
+                val carrierAr = TelecomCarrier.fromId(session.carrierId).arabicName
+                otpDigitsInput = session.generatedOtpCode
+                statusBannerMessage = "تم التقاط رمز التحقق (${session.generatedOtpCode}) تلقائياً من رسالة $carrierAr"
+            }
+            for (remaining in 118 downTo 0) {
+                delay(1000)
+                if (activeOtpSession == null) break
+                otpRemainingSeconds = remaining
+            }
+        }
+    }
+
+    fun updateOtpInput(otp: String) {
+        otpDigitsInput = otp.filter { it.isDigit() }.take(6)
+        errorMessage = null
+    }
+
+    fun autoFillDemoOtp() {
+        val session = activeOtpSession ?: return
+        otpDigitsInput = session.generatedOtpCode
+        statusBannerMessage = "تمت تعبئة رمز التحقق السريع: ${session.generatedOtpCode}"
+    }
+
+    fun dismissOtpDialog() {
+        otpCountdownJob?.cancel()
+        activeOtpSession = null
+        otpDigitsInput = ""
+        errorMessage = null
+    }
+
+    fun confirmOtpAndFetchResult() {
+        val session = activeOtpSession ?: return
+        val cleanOtp = otpDigitsInput.filter { it.isDigit() }
+        if (cleanOtp.length < 4) {
+            errorMessage = "يرجى إدخال رمز التحقق المكون من 6 أرقام"
+            return
+        }
+
+        isLoading = true
+        errorMessage = null
+
+        viewModelScope.launch {
+            delay(400)
+            val carrier = TelecomCarrier.fromId(session.carrierId)
+            val carrierPackages = TelecomCatalogData.packages.filter { it.carrier == carrier }
+            val seed = abs(session.phoneNumber.hashCode())
+            val chosenPkg = carrierPackages.getOrElse(seed % carrierPackages.size.coerceAtLeast(1)) {
+                TelecomCatalogData.packages.first()
+            }
+
+            val record = LocalTelecomStorage.buildVerifiedRecord(
+                session = session,
+                carrierName = carrier.arabicName,
+                chosenPackageTitle = chosenPkg.title,
+                dataQuotaText = chosenPkg.dataQuota,
+                voiceQuotaText = chosenPkg.voiceQuota,
+                enteredOtp = cleanOtp,
+                customLabel = subscriberLabelInput
+            )
+
+            val updatedList = listOf(record) + allRecords
+            storage.saveRecords(updatedList)
+            allRecords = updatedList
+            latestResult = record
+            otpCountdownJob?.cancel()
+            activeOtpSession = null
+            otpDigitsInput = ""
+            isLoading = false
+            statusBannerMessage = "تم تحديث بيانات الرصيد والباقات وحفظها في السجل بنجاح"
+        }
+    }
+
+    fun selectRecordForInspection(record: QueryRecordItem) {
+        val carrier = TelecomCarrier.fromId(record.carrierId)
+        currentTab = AppTab.QUERY
+        selectedCarrier = carrier
+        phoneInput = record.phoneNumber
+        subscriberLabelInput = record.subscriberLabel
+        latestResult = record
+        statusBannerMessage = "تم عرض تقرير الرقم ${record.phoneNumber}"
+    }
+
+    fun toggleFavoriteRecord(record: QueryRecordItem) {
+        val updated = allRecords.map {
+            if (it.id == record.id) it.copy(isFavorite = !it.isFavorite) else it
+        }
+        storage.saveRecords(updated)
+        allRecords = updated
+        if (latestResult?.id == record.id) {
+            latestResult = record.copy(isFavorite = !record.isFavorite)
+        }
+    }
+
+    fun deleteHistoryRecord(recordId: Long) {
+        val updated = allRecords.filterNot { it.id == recordId }
+        storage.saveRecords(updated)
+        allRecords = updated
+        statusBannerMessage = "تم حذف السجل المحدد"
+    }
+
+    fun clearAllHistory() {
+        storage.saveRecords(emptyList())
+        allRecords = emptyList()
+        statusBannerMessage = "تم مسح سجل العمليات بالكامل"
+    }
+
+    fun getFavoriteRecords(): List<QueryRecordItem> {
+        return allRecords.filter { it.isFavorite }
+    }
+
+    fun getFilteredHistoryRecords(): List<QueryRecordItem> {
+        val q = historySearchQuery.trim()
+        return allRecords.filter { rec ->
+            val matchesFav = !historyOnlyFavorites || rec.isFavorite
+            val matchesCarrier = selectedCarrierFilter == null || rec.carrierId == selectedCarrierFilter?.id
             val matchesQuery = q.isEmpty() ||
                 rec.phoneNumber.contains(q) ||
                 rec.subscriberLabel.contains(q, ignoreCase = true) ||
                 rec.activePackageName.contains(q, ignoreCase = true)
             matchesFav && matchesCarrier && matchesQuery
         }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
-
-    private var otpCountdownJob: Job? = null
-
-    init {
-        viewModelScope.launch {
-            val savedCarrier = repository.defaultCarrierFlow.first()
-            _uiState.update { it.copy(selectedCarrier = savedCarrier) }
-            val existing = repository.allRecordsFlow.first()
-            if (existing.isEmpty()) {
-                repository.seedInitialSampleIfEmpty(0)
-            }
-            val updated = repository.allRecordsFlow.first()
-            if (updated.isNotEmpty() && _uiState.value.latestResult == null) {
-                _uiState.update { it.copy(latestResult = updated.first()) }
-            }
-        }
-    }
-
-    fun selectTab(tab: AppTab) {
-        _uiState.update { it.copy(currentTab = tab, errorMessage = null, statusBannerMessage = null) }
-    }
-
-    fun toggleDarkTheme() {
-        viewModelScope.launch {
-            repository.setDarkTheme(!isDarkTheme.value)
-        }
-    }
-
-    fun selectCarrier(carrier: TelecomCarrier) {
-        _uiState.update {
-            it.copy(
-                selectedCarrier = carrier,
-                autoDetectedCarrier = false,
-                errorMessage = null
-            )
-        }
-        viewModelScope.launch {
-            repository.setDefaultCarrier(carrier)
-        }
-    }
-
-    fun updatePhoneInput(newPhone: String) {
-        val filtered = newPhone.filter { it.isDigit() || it == '+' }.take(14)
-        val detected = TelecomCarrier.detectFromPhone(filtered)
-        _uiState.update { current ->
-            val updatedCarrier = detected ?: current.selectedCarrier
-            current.copy(
-                phoneInput = filtered,
-                selectedCarrier = updatedCarrier,
-                autoDetectedCarrier = detected != null && detected != current.selectedCarrier,
-                errorMessage = null
-            )
-        }
-    }
-
-    fun updateSubscriberLabelInput(label: String) {
-        _uiState.update { it.copy(subscriberLabelInput = label.take(35)) }
-    }
-
-    fun initiatePortalBalanceQuery() {
-        val state = _uiState.value
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null, statusBannerMessage = null) }
-            val result = repository.requestOtpForPhone(state.phoneInput, state.selectedCarrier)
-            result.fold(
-                onSuccess = { session ->
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            activeOtpSession = session,
-                            otpDigitsInput = "",
-                            otpRemainingSeconds = 120
-                        )
-                    }
-                    startOtpTimer(session)
-                },
-                onFailure = { error ->
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            errorMessage = error.message ?: "تعذر إرسال طلب التحقق"
-                        )
-                    }
-                }
-            )
-        }
-    }
-
-    private fun startOtpTimer(session: OtpSessionState) {
-        otpCountdownJob?.cancel()
-        otpCountdownJob = viewModelScope.launch {
-            // Simulate automatic SMS receiver capture after 2.2 seconds if auto-listen is enabled
-            delay(1800)
-            if (_uiState.value.activeOtpSession?.sessionToken == session.sessionToken &&
-                _uiState.value.otpDigitsInput.isEmpty() &&
-                _uiState.value.isAutoSmsListening
-            ) {
-                _uiState.update {
-                    it.copy(
-                        otpDigitsInput = session.generatedOtpCode,
-                        statusBannerMessage = "تم التقاط رمز التحقق (${session.generatedOtpCode}) تلقائياً من رسالة ${session.carrier.arabicName}"
-                    )
-                }
-            }
-            for (remaining in 118 downTo 0) {
-                delay(1000)
-                if (_uiState.value.activeOtpSession == null) break
-                _uiState.update { it.copy(otpRemainingSeconds = remaining) }
-            }
-        }
-    }
-
-    fun updateOtpInput(otp: String) {
-        val clean = otp.filter { it.isDigit() }.take(6)
-        _uiState.update { it.copy(otpDigitsInput = clean, errorMessage = null) }
-    }
-
-    fun autoFillDemoOtp() {
-        val session = _uiState.value.activeOtpSession ?: return
-        _uiState.update {
-            it.copy(
-                otpDigitsInput = session.generatedOtpCode,
-                statusBannerMessage = "تمت تعبئة رمز التحقق السريع: ${session.generatedOtpCode}"
-            )
-        }
-    }
-
-    fun dismissOtpDialog() {
-        otpCountdownJob?.cancel()
-        _uiState.update { it.copy(activeOtpSession = null, otpDigitsInput = "", errorMessage = null) }
-    }
-
-    fun confirmOtpAndFetchResult() {
-        val state = _uiState.value
-        val session = state.activeOtpSession ?: return
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val result = repository.verifyOtpAndFetchBalance(
-                session = session,
-                enteredOtp = state.otpDigitsInput,
-                customSubscriberLabel = state.subscriberLabelInput
-            )
-            result.fold(
-                onSuccess = { record ->
-                    otpCountdownJob?.cancel()
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            activeOtpSession = null,
-                            otpDigitsInput = "",
-                            latestResult = record,
-                            statusBannerMessage = "تم تحديث بيانات الرصيد والباقات وحفظها في السجل بنجاح"
-                        )
-                    }
-                },
-                onFailure = { err ->
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            errorMessage = err.message ?: "رمز التحقق غير صحيح"
-                        )
-                    }
-                }
-            )
-        }
-    }
-
-    fun selectRecordForInspection(record: QueryRecordEntity) {
-        val carrier = TelecomCarrier.fromId(record.carrierId)
-        _uiState.update {
-            it.copy(
-                currentTab = AppTab.QUERY,
-                selectedCarrier = carrier,
-                phoneInput = record.phoneNumber,
-                subscriberLabelInput = record.subscriberLabel,
-                latestResult = record,
-                statusBannerMessage = "تم عرض تقرير الرقم ${record.phoneNumber}"
-            )
-        }
-    }
-
-    fun toggleFavoriteRecord(record: QueryRecordEntity) {
-        viewModelScope.launch {
-            repository.toggleFavorite(record)
-            if (_uiState.value.latestResult?.id == record.id) {
-                _uiState.update {
-                    it.copy(latestResult = record.copy(isFavorite = !record.isFavorite))
-                }
-            }
-        }
-    }
-
-    fun deleteHistoryRecord(recordId: Long) {
-        viewModelScope.launch {
-            repository.deleteRecord(recordId)
-            _uiState.update {
-                it.copy(statusBannerMessage = "تم حذف السجل المحدد")
-            }
-        }
-    }
-
-    fun clearAllHistory() {
-        viewModelScope.launch {
-            repository.clearAllHistory()
-            _uiState.update {
-                it.copy(statusBannerMessage = "تم مسح سجل العمليات بالكامل")
-            }
-        }
     }
 
     // Packages & USSD methods
     fun selectPackageCategory(category: PackageCategory) {
-        _uiState.update { it.copy(selectedPackageCategory = category) }
+        selectedPackageCategory = category
     }
 
     fun updatePackageSearch(query: String) {
-        _uiState.update { it.copy(packageSearchQuery = query) }
+        packageSearchQuery = query
     }
 
     fun getFilteredPackages(): List<TelecomPackage> {
-        val state = _uiState.value
+        val q = packageSearchQuery.trim()
         return TelecomCatalogData.packages.filter { pkg ->
-            val matchesCarrier = pkg.carrier == state.selectedCarrier
-            val matchesCategory = state.selectedPackageCategory == PackageCategory.ALL ||
-                pkg.category == state.selectedPackageCategory
-            val q = state.packageSearchQuery.trim()
+            val matchesCarrier = pkg.carrier == selectedCarrier
+            val matchesCategory = selectedPackageCategory == PackageCategory.ALL ||
+                pkg.category == selectedPackageCategory
             val matchesSearch = q.isEmpty() ||
                 pkg.title.contains(q, ignoreCase = true) ||
                 pkg.subtitle.contains(q, ignoreCase = true) ||
@@ -333,58 +332,59 @@ class TelecomViewModel(
     }
 
     fun getCarrierQuickUssdCodes(): List<UssdQuickCode> {
-        val carrier = _uiState.value.selectedCarrier
-        return TelecomCatalogData.quickUssdCodes.filter { it.carrier == carrier }
+        return TelecomCatalogData.quickUssdCodes.filter { it.carrier == selectedCarrier }
     }
 
     // Smart Calculator methods
     fun updateCalcAmount(amount: String) {
-        val clean = amount.filter { it.isDigit() || it == '.' }.take(8)
-        _uiState.update { it.copy(calcAmountInput = clean) }
+        calcAmountInput = amount.filter { it.isDigit() || it == '.' }.take(8)
     }
 
     fun toggleCalcMode(isGrossToNet: Boolean) {
-        _uiState.update { it.copy(calcIsGrossToNet = isGrossToNet) }
+        calcIsGrossToNet = isGrossToNet
     }
 
     fun updateCalcDataGb(gb: String) {
-        val clean = gb.filter { it.isDigit() || it == '.' }.take(5)
-        _uiState.update { it.copy(calcDataGbInput = clean) }
+        calcDataGbInput = gb.filter { it.isDigit() || it == '.' }.take(5)
     }
 
     fun updateCalcDays(days: String) {
-        val clean = days.filter { it.isDigit() }.take(3)
-        _uiState.update { it.copy(calcDaysInput = clean) }
+        calcDaysInput = days.filter { it.isDigit() }.take(3)
     }
 
     // History filters
     fun updateHistorySearch(query: String) {
-        _uiState.update { it.copy(historySearchQuery = query) }
+        historySearchQuery = query
     }
 
     fun toggleHistoryFavoritesFilter() {
-        _uiState.update { it.copy(historyOnlyFavorites = !it.historyOnlyFavorites) }
+        historyOnlyFavorites = !historyOnlyFavorites
     }
 
     fun selectHistoryCarrierFilter(carrier: TelecomCarrier?) {
-        _uiState.update { it.copy(selectedCarrierFilter = carrier) }
+        selectedCarrierFilter = carrier
     }
 
     fun generateExportContent(asCsv: Boolean): String {
-        val list = filteredHistoryRecords.value.ifEmpty { allRecords.value }
-        return repository.formatExportReport(list, asCsv)
+        val list = getFilteredHistoryRecords().ifEmpty { allRecords }
+        return LocalTelecomStorage.formatExportText(
+            records = list,
+            carrierNameResolver = { id -> TelecomCarrier.fromId(id).arabicName },
+            asCsv = asCsv
+        )
     }
 
     fun dismissBanner() {
-        _uiState.update { it.copy(errorMessage = null, statusBannerMessage = null) }
+        errorMessage = null
+        statusBannerMessage = null
     }
 
     companion object {
-        fun provideFactory(repository: TelecomRepository): ViewModelProvider.Factory {
+        fun provideFactory(storage: LocalTelecomStorage): ViewModelProvider.Factory {
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return TelecomViewModel(repository) as T
+                    return TelecomViewModel(storage) as T
                 }
             }
         }

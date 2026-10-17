@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,12 +42,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.data.QueryRecordEntity
+import com.example.QueryRecordItem
 import com.example.data.TelecomCarrier
 import com.example.ui.theme.ImperialGold
 import com.example.ui.theme.RoyalMaroon
@@ -59,13 +57,15 @@ import java.util.Locale
 
 @Composable
 fun HistoryExportScreen(
-    uiState: TelecomUiState,
-    records: List<QueryRecordEntity>,
+    historySearchQuery: String,
+    historyOnlyFavorites: Boolean,
+    selectedCarrierFilter: TelecomCarrier?,
+    records: List<QueryRecordItem>,
     onSearchChanged: (String) -> Unit,
     onToggleFavoritesOnly: () -> Unit,
     onCarrierFilterSelected: (TelecomCarrier?) -> Unit,
-    onInspectRecord: (QueryRecordEntity) -> Unit,
-    onToggleFavorite: (QueryRecordEntity) -> Unit,
+    onInspectRecord: (QueryRecordItem) -> Unit,
+    onToggleFavorite: (QueryRecordItem) -> Unit,
     onDeleteRecord: (Long) -> Unit,
     onClearAll: () -> Unit,
     onExportCsv: () -> Unit,
@@ -79,7 +79,6 @@ fun HistoryExportScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Export & Filter Control Header
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -123,7 +122,6 @@ fun HistoryExportScreen(
                         }
                     }
 
-                    // Export Action Buttons
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -166,7 +164,7 @@ fun HistoryExportScreen(
                     }
 
                     OutlinedTextField(
-                        value = uiState.historySearchQuery,
+                        value = historySearchQuery,
                         onValueChange = onSearchChanged,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -174,7 +172,7 @@ fun HistoryExportScreen(
                         placeholder = { Text("ابحث بالرقم أو اسم المشترك أو الباقة...") },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         trailingIcon = {
-                            if (uiState.historySearchQuery.isNotEmpty()) {
+                            if (historySearchQuery.isNotEmpty()) {
                                 IconButton(onClick = { onSearchChanged("") }) {
                                     Icon(Icons.Default.Clear, contentDescription = "مسح")
                                 }
@@ -187,7 +185,7 @@ fun HistoryExportScreen(
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         item {
                             FilterChip(
-                                selected = uiState.historyOnlyFavorites,
+                                selected = historyOnlyFavorites,
                                 onClick = onToggleFavoritesOnly,
                                 label = { Text("المفضلة فقط") },
                                 leadingIcon = {
@@ -204,14 +202,14 @@ fun HistoryExportScreen(
                         }
                         item {
                             FilterChip(
-                                selected = uiState.selectedCarrierFilter == null,
+                                selected = selectedCarrierFilter == null,
                                 onClick = { onCarrierFilterSelected(null) },
                                 label = { Text("كل الشبكات") }
                             )
                         }
                         items(TelecomCarrier.entries) { carrier ->
                             FilterChip(
-                                selected = uiState.selectedCarrierFilter == carrier,
+                                selected = selectedCarrierFilter == carrier,
                                 onClick = { onCarrierFilterSelected(carrier) },
                                 label = { Text(carrier.arabicName) }
                             )
@@ -240,7 +238,7 @@ fun HistoryExportScreen(
 
 @Composable
 private fun HistoryRecordItemCard(
-    record: QueryRecordEntity,
+    record: QueryRecordItem,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     onDelete: () -> Unit

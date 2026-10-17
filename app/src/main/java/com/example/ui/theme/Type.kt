@@ -2,24 +2,13 @@ package com.example.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import com.example.R
 
-val CairoFontFamily = FontFamily(
-    Font(R.font.cairo, FontWeight.Normal),
-    Font(R.font.cairo, FontWeight.Medium),
-    Font(R.font.cairo, FontWeight.SemiBold),
-    Font(R.font.cairo, FontWeight.Bold)
-)
-
-val TajawalFontFamily = FontFamily(
-    Font(R.font.tajawal, FontWeight.Normal),
-    Font(R.font.tajawal, FontWeight.Medium),
-    Font(R.font.tajawal, FontWeight.Bold)
-)
+// Use safe system SansSerif font family to prevent Samsung OneUI variable-font STAT table crashes
+val CairoFontFamily = FontFamily.SansSerif
+val TajawalFontFamily = FontFamily.SansSerif
 
 val Typography = Typography(
     displayLarge = TextStyle(

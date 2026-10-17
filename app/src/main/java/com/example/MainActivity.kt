@@ -10,9 +10,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,7 +17,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -28,7 +24,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Calculate
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LightMode
@@ -55,7 +50,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -64,10 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.data.AppDatabase
-import com.example.data.TelecomRepository
 import com.example.ui.AppTab
 import com.example.ui.HistoryExportScreen
 import com.example.ui.PackagesUssdScreen
@@ -85,20 +76,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val database = AppDatabase.getInstance(applicationContext)
-        val repository = TelecomRepository(applicationContext, database.queryRecordDao())
+        val storage = LocalTelecomStorage(applicationContext)
 
         setContent {
             val viewModel: TelecomViewModel = viewModel(
-                factory = TelecomViewModel.provideFactory(repository)
+                factory = TelecomViewModel.provideFactory(storage)
             )
-            val isDarkTheme by viewModel.isDarkTheme.collectAsStateWithLifecycle()
 
-            YemenBalanceTheme(darkTheme = isDarkTheme) {
-                YemenTelecomAppRoot(
-                    viewModel = viewModel,
-                    isDarkTheme = isDarkTheme
-                )
+            YemenBalanceTheme(darkTheme = viewModel.isDarkTheme) {
+                YemenTelecomAppRoot(viewModel = viewModel)
             }
         }
     }
@@ -107,27 +93,20 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun YemenTelecomAppRoot(
-    viewModel: TelecomViewModel,
-    isDarkTheme: Boolean
+    viewModel: TelecomViewModel
 ) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val allRecords by viewModel.allRecords.collectAsStateWithLifecycle()
-    val filteredRecords by viewModel.filteredHistoryRecords.collectAsStateWithLifecycle()
-    val favoriteRecords = remember(allRecords) { allRecords.filter { it.isFavorite } }
-
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    // Handle system back button when on secondary tabs
-    if (uiState.currentTab != AppTab.QUERY) {
+    if (viewModel.currentTab != AppTab.QUERY) {
         BackHandler {
             viewModel.selectTab(AppTab.QUERY)
         }
     }
 
-    LaunchedEffect(uiState.statusBannerMessage, uiState.errorMessage) {
-        val message = uiState.errorMessage ?: uiState.statusBannerMessage
+    LaunchedEffect(viewModel.statusBannerMessage, viewModel.errorMessage) {
+        val message = viewModel.errorMessage ?: viewModel.statusBannerMessage
         if (!message.isNullOrBlank()) {
             snackbarHostState.showSnackbar(message)
             viewModel.dismissBanner()
@@ -186,8 +165,8 @@ fun YemenTelecomAppRoot(
                             modifier = Modifier.testTag("theme_toggle_button")
                         ) {
                             Icon(
-                                imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
-                                contentDescription = if (isDarkTheme) "تفعيل الوضع النهاري" else "تفعيل الوضع الليلي",
+                                imageVector = if (viewModel.isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                                contentDescription = if (viewModel.isDarkTheme) "تفعيل الوضع النهاري" else "تفعيل الوضع الليلي",
                                 tint = ImperialGold
                             )
                         }
@@ -204,7 +183,7 @@ fun YemenTelecomAppRoot(
                 tonalElevation = 8.dp
             ) {
                 AppTab.entries.forEach { tab ->
-                    val selected = uiState.currentTab == tab
+                    val selected = viewModel.currentTab == tab
                     val icon = when (tab) {
                         AppTab.QUERY -> if (selected) Icons.Filled.PhoneAndroid else Icons.Outlined.PhoneAndroid
                         AppTab.PACKAGES -> if (selected) Icons.Filled.LocalOffer else Icons.Outlined.LocalOffer
@@ -245,11 +224,20 @@ fun YemenTelecomAppRoot(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            when (uiState.currentTab) {
+            when (viewModel.currentTab) {
                 AppTab.QUERY -> {
                     QueryDashboardScreen(
-                        uiState = uiState,
-                        favoriteRecords = favoriteRecords,
+                        selectedCarrier = viewModel.selectedCarrier,
+                        autoDetectedCarrier = viewModel.autoDetectedCarrier,
+                        phoneInput = viewModel.phoneInput,
+                        subscriberLabelInput = viewModel.subscriberLabelInput,
+                        isLoading = viewModel.isLoading,
+                        errorMessage = viewModel.errorMessage,
+                        latestResult = viewModel.latestResult,
+                        activeOtpSession = viewModel.activeOtpSession,
+                        otpDigitsInput = viewModel.otpDigitsInput,
+                        otpRemainingSeconds = viewModel.otpRemainingSeconds,
+                        favoriteRecords = viewModel.getFavoriteRecords(),
                         onCarrierSelected = viewModel::selectCarrier,
                         onPhoneChanged = viewModel::updatePhoneInput,
                         onLabelChanged = viewModel::updateSubscriberLabelInput,
@@ -277,9 +265,9 @@ fun YemenTelecomAppRoot(
 
                 AppTab.PACKAGES -> {
                     PackagesUssdScreen(
-                        selectedCarrier = uiState.selectedCarrier,
-                        selectedCategory = uiState.selectedPackageCategory,
-                        searchQuery = uiState.packageSearchQuery,
+                        selectedCarrier = viewModel.selectedCarrier,
+                        selectedCategory = viewModel.selectedPackageCategory,
+                        searchQuery = viewModel.packageSearchQuery,
                         packages = viewModel.getFilteredPackages(),
                         quickCodes = viewModel.getCarrierQuickUssdCodes(),
                         onCarrierSelected = viewModel::selectCarrier,
@@ -299,7 +287,11 @@ fun YemenTelecomAppRoot(
 
                 AppTab.CALCULATOR -> {
                     SmartCalculatorScreen(
-                        uiState = uiState,
+                        carrier = viewModel.selectedCarrier,
+                        calcAmountInput = viewModel.calcAmountInput,
+                        calcIsGrossToNet = viewModel.calcIsGrossToNet,
+                        calcDataGbInput = viewModel.calcDataGbInput,
+                        calcDaysInput = viewModel.calcDaysInput,
                         onAmountChanged = viewModel::updateCalcAmount,
                         onToggleCalcMode = viewModel::toggleCalcMode,
                         onDataGbChanged = viewModel::updateCalcDataGb,
@@ -313,8 +305,10 @@ fun YemenTelecomAppRoot(
 
                 AppTab.HISTORY -> {
                     HistoryExportScreen(
-                        uiState = uiState,
-                        records = filteredRecords,
+                        historySearchQuery = viewModel.historySearchQuery,
+                        historyOnlyFavorites = viewModel.historyOnlyFavorites,
+                        selectedCarrierFilter = viewModel.selectedCarrierFilter,
+                        records = viewModel.getFilteredHistoryRecords(),
                         onSearchChanged = viewModel::updateHistorySearch,
                         onToggleFavoritesOnly = viewModel::toggleHistoryFavoritesFilter,
                         onCarrierFilterSelected = viewModel::selectHistoryCarrierFilter,

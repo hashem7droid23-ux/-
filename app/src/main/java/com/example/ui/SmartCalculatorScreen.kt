@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.data.TelecomCarrier
 import com.example.ui.theme.EmeraldSuccess
@@ -46,7 +46,11 @@ import kotlin.math.ceil
 
 @Composable
 fun SmartCalculatorScreen(
-    uiState: TelecomUiState,
+    carrier: TelecomCarrier,
+    calcAmountInput: String,
+    calcIsGrossToNet: Boolean,
+    calcDataGbInput: String,
+    calcDaysInput: String,
     onAmountChanged: (String) -> Unit,
     onToggleCalcMode: (Boolean) -> Unit,
     onDataGbChanged: (String) -> Unit,
@@ -54,29 +58,25 @@ fun SmartCalculatorScreen(
     onCopySummary: (String, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val carrier = uiState.selectedCarrier
     val taxRate = carrier.defaultTaxRatePercent / 100.0
-    val rawAmount = uiState.calcAmountInput.toDoubleOrNull() ?: 0.0
+    val rawAmount = calcAmountInput.toDoubleOrNull() ?: 0.0
 
-    // Calculate net vs gross
     val requiredGrossPayment: Int
     val netBalanceReceived: Int
     val taxDeducted: Int
 
-    if (uiState.calcIsGrossToNet) {
-        // User pays X rials -> how much net credit arrives?
+    if (calcIsGrossToNet) {
         requiredGrossPayment = rawAmount.toInt()
         netBalanceReceived = (rawAmount / (1.0 + taxRate)).toInt()
         taxDeducted = (requiredGrossPayment - netBalanceReceived).coerceAtLeast(0)
     } else {
-        // User needs X net credit for a package -> how much gross rials to recharge?
         netBalanceReceived = rawAmount.toInt()
         requiredGrossPayment = ceil(rawAmount * (1.0 + taxRate)).toInt()
         taxDeducted = (requiredGrossPayment - netBalanceReceived).coerceAtLeast(0)
     }
 
-    val gbInput = uiState.calcDataGbInput.toDoubleOrNull() ?: 0.0
-    val daysInput = (uiState.calcDaysInput.toIntOrNull() ?: 30).coerceAtLeast(1)
+    val gbInput = calcDataGbInput.toDoubleOrNull() ?: 0.0
+    val daysInput = (calcDaysInput.toIntOrNull() ?: 30).coerceAtLeast(1)
     val totalMegabytes = (gbInput * 1024).toInt()
     val dailyMegabytesAllowance = totalMegabytes / daysInput
 
@@ -87,7 +87,6 @@ fun SmartCalculatorScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Tax & Recharge Balance Calculator Card
         item {
             Card(
                 modifier = Modifier
@@ -129,7 +128,7 @@ fun SmartCalculatorScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilterChip(
-                            selected = !uiState.calcIsGrossToNet,
+                            selected = !calcIsGrossToNet,
                             onClick = { onToggleCalcMode(false) },
                             label = { Text("كم أشحن لتفعيل باقة؟") },
                             leadingIcon = {
@@ -141,7 +140,7 @@ fun SmartCalculatorScreen(
                             modifier = Modifier.weight(1f)
                         )
                         FilterChip(
-                            selected = uiState.calcIsGrossToNet,
+                            selected = calcIsGrossToNet,
                             onClick = { onToggleCalcMode(true) },
                             label = { Text("كم يصلني صافي عند الشحن؟") },
                             colors = FilterChipDefaults.filterChipColors(
@@ -152,14 +151,14 @@ fun SmartCalculatorScreen(
                     }
 
                     OutlinedTextField(
-                        value = uiState.calcAmountInput,
+                        value = calcAmountInput,
                         onValueChange = onAmountChanged,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("calc_amount_input"),
                         label = {
                             Text(
-                                if (uiState.calcIsGrossToNet) "المبلغ المدفوع عند الشحن (ريال)"
+                                if (calcIsGrossToNet) "المبلغ المدفوع عند الشحن (ريال)"
                                 else "سعر الباقة المطلوب تفعيلها (ريال صافي)"
                             )
                         },
@@ -168,7 +167,6 @@ fun SmartCalculatorScreen(
                         shape = RoundedCornerShape(14.dp)
                     )
 
-                    // Quick Preset Buttons
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -186,7 +184,7 @@ fun SmartCalculatorScreen(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = ImperialGold,
                                     modifier = Modifier.padding(vertical = 8.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    textAlign = TextAlign.Center
                                 )
                             }
                         }
@@ -236,7 +234,6 @@ fun SmartCalculatorScreen(
             }
         }
 
-        // 2. Data Quota & Daily Consumption Converter Card
         item {
             Card(
                 modifier = Modifier
@@ -278,7 +275,7 @@ fun SmartCalculatorScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         OutlinedTextField(
-                            value = uiState.calcDataGbInput,
+                            value = calcDataGbInput,
                             onValueChange = onDataGbChanged,
                             modifier = Modifier
                                 .weight(1f)
@@ -290,7 +287,7 @@ fun SmartCalculatorScreen(
                         )
 
                         OutlinedTextField(
-                            value = uiState.calcDaysInput,
+                            value = calcDaysInput,
                             onValueChange = onDaysChanged,
                             modifier = Modifier
                                 .weight(1f)

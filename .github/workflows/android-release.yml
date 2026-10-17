@@ -69,10 +69,24 @@ jobs:
         run: |
           gradle assembleDebug assembleRelease --no-daemon --stacktrace
 
-      - name: Prepare APK Output Directory
+      - name: Re-sign Release APK with v1+v2+v3 Schemes for Universal Install
         run: |
           mkdir -p release-apks
-          cp app/build/outputs/apk/release/*.apk release-apks/yemen-mobile-balance-release.apk
+          export ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          ZIPALIGN=$(find "$ANDROID_SDK_ROOT/build-tools" -name zipalign | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner | sort -V | tail -n 1)
+          RAW_RELEASE=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          if [ -n "$ZIPALIGN" ] && [ -n "$APKSIGNER" ]; then
+            "$ZIPALIGN" -p -f -v 4 "$RAW_RELEASE" release-apks/aligned-release.apk
+            "$APKSIGNER" sign --ks "${{ github.workspace }}/my-upload-key.jks" \
+              --ks-key-alias upload --ks-pass pass:android123 --key-pass pass:android123 \
+              --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+              --out release-apks/yemen-mobile-balance-release.apk release-apks/aligned-release.apk
+            rm -f release-apks/aligned-release.apk
+            "$APKSIGNER" verify --verbose release-apks/yemen-mobile-balance-release.apk
+          else
+            cp "$RAW_RELEASE" release-apks/yemen-mobile-balance-release.apk
+          fi
           cp app/build/outputs/apk/debug/*.apk release-apks/yemen-mobile-balance-debug.apk
           ls -lh release-apks/
 
@@ -91,6 +105,6 @@ jobs:
           name: "رصيد يمن موبايل والشبكات اليمنية (v2.0.${{ github.run_number }})"
           body: |
             ### تطبيق رصيد يمن موبايل والشبكات اليمنية 📱🇾🇪
-            - **`yemen-mobile-balance-release.apk`**: النسخة النهائية الموقعة والجاهزة للتثبيت المباشر على الهاتف.
+            - **`yemen-mobile-balance-release.apk`**: النسخة النهائية الموقعة بتوقيع ثلاثي (v1 + v2 + v3) والجاهزة للتثبيت المباشر على جميع الهواتف.
             - **`yemen-mobile-balance-debug.apk`**: نسخة التجربة والفحص.
           files: release-apks/*.apk

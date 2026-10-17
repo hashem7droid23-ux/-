@@ -19,11 +19,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.LocalOffer
-import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Speed
@@ -402,7 +402,7 @@ private fun TelecomPackageCard(
                     modifier = Modifier.weight(1f)
                 )
                 QuotaBadgePill(
-                    icon = Icons.Default.Message,
+                    icon = Icons.AutoMirrored.Filled.Message,
                     label = pkg.smsQuota,
                     modifier = Modifier.weight(1f)
                 )

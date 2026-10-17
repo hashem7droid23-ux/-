@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
@@ -37,8 +38,6 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dialpad
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
@@ -83,8 +82,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.OtpSessionState
-import com.example.data.QueryRecordEntity
+import com.example.OtpSessionItem
+import com.example.QueryRecordItem
 import com.example.data.TelecomCarrier
 import com.example.ui.theme.DeepMaroon
 import com.example.ui.theme.EmeraldSuccess
@@ -98,8 +97,17 @@ import java.util.Locale
 
 @Composable
 fun QueryDashboardScreen(
-    uiState: TelecomUiState,
-    favoriteRecords: List<QueryRecordEntity>,
+    selectedCarrier: TelecomCarrier,
+    autoDetectedCarrier: Boolean,
+    phoneInput: String,
+    subscriberLabelInput: String,
+    isLoading: Boolean,
+    errorMessage: String?,
+    latestResult: QueryRecordItem?,
+    activeOtpSession: OtpSessionItem?,
+    otpDigitsInput: String,
+    otpRemainingSeconds: Int,
+    favoriteRecords: List<QueryRecordItem>,
     onCarrierSelected: (TelecomCarrier) -> Unit,
     onPhoneChanged: (String) -> Unit,
     onLabelChanged: (String) -> Unit,
@@ -107,8 +115,8 @@ fun QueryDashboardScreen(
     onDialUssdClick: (String) -> Unit,
     onCopyText: (String, String) -> Unit,
     onShareReport: (String) -> Unit,
-    onToggleFavorite: (QueryRecordEntity) -> Unit,
-    onSelectFavoriteRecord: (QueryRecordEntity) -> Unit,
+    onToggleFavorite: (QueryRecordItem) -> Unit,
+    onSelectFavoriteRecord: (QueryRecordItem) -> Unit,
     onOtpInputChanged: (String) -> Unit,
     onAutoFillOtp: () -> Unit,
     onConfirmOtp: () -> Unit,
@@ -122,16 +130,14 @@ fun QueryDashboardScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Luxury Royal Hero Header & Carrier Switcher
         item {
             LuxuryCarrierHeroBanner(
-                selectedCarrier = uiState.selectedCarrier,
-                autoDetected = uiState.autoDetectedCarrier,
+                selectedCarrier = selectedCarrier,
+                autoDetected = autoDetectedCarrier,
                 onCarrierSelected = onCarrierSelected
             )
         }
 
-        // 2. Quick Saved / Favorite Numbers Bar
         if (favoriteRecords.isNotEmpty()) {
             item {
                 FavoriteNumbersQuickRow(
@@ -141,22 +147,20 @@ fun QueryDashboardScreen(
             }
         }
 
-        // 3. Smart Phone Input & Dual Query Action Card
         item {
             SmartPhoneQueryCard(
-                carrier = uiState.selectedCarrier,
-                phoneInput = uiState.phoneInput,
-                subscriberLabel = uiState.subscriberLabelInput,
-                isLoading = uiState.isLoading,
+                carrier = selectedCarrier,
+                phoneInput = phoneInput,
+                subscriberLabel = subscriberLabelInput,
+                isLoading = isLoading,
                 onPhoneChanged = onPhoneChanged,
                 onLabelChanged = onLabelChanged,
                 onPortalQueryClick = onPortalQueryClick,
-                onDialUssdClick = { onDialUssdClick(uiState.selectedCarrier.balanceUssd) }
+                onDialUssdClick = { onDialUssdClick(selectedCarrier.balanceUssd) }
             )
         }
 
-        // 4. Rich Balance & Package Result Card
-        uiState.latestResult?.let { result ->
+        latestResult?.let { result ->
             item {
                 BalanceResultLuxuryCard(
                     record = result,
@@ -174,14 +178,13 @@ fun QueryDashboardScreen(
         }
     }
 
-    // OTP Verification Modal Dialog
-    uiState.activeOtpSession?.let { session ->
+    activeOtpSession?.let { session ->
         OtpVerificationModal(
             session = session,
-            otpInput = uiState.otpDigitsInput,
-            remainingSeconds = uiState.otpRemainingSeconds,
-            isLoading = uiState.isLoading,
-            errorMessage = uiState.errorMessage,
+            otpInput = otpDigitsInput,
+            remainingSeconds = otpRemainingSeconds,
+            isLoading = isLoading,
+            errorMessage = errorMessage,
             onOtpChanged = onOtpInputChanged,
             onAutoFillDemo = onAutoFillOtp,
             onVerifyClick = onConfirmOtp,
@@ -232,7 +235,6 @@ private fun LuxuryCarrierHeroBanner(
                 .fillMaxWidth()
                 .background(Brush.linearGradient(gradientColors))
         ) {
-            // Subtle luxury Arabesque/Golden radar rings drawn behind
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -330,7 +332,6 @@ private fun LuxuryCarrierHeroBanner(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Carrier Selector Pills
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -374,8 +375,8 @@ private fun LuxuryCarrierHeroBanner(
 
 @Composable
 private fun FavoriteNumbersQuickRow(
-    favorites: List<QueryRecordEntity>,
-    onSelect: (QueryRecordEntity) -> Unit
+    favorites: List<QueryRecordItem>,
+    onSelect: (QueryRecordItem) -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -615,7 +616,7 @@ private fun SmartPhoneQueryCard(
 
 @Composable
 private fun BalanceResultLuxuryCard(
-    record: QueryRecordEntity,
+    record: QueryRecordItem,
     onToggleFavorite: () -> Unit,
     onShareReport: () -> Unit,
     onCopyPhone: () -> Unit,
@@ -657,7 +658,6 @@ private fun BalanceResultLuxuryCard(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Top Status Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -734,7 +734,6 @@ private fun BalanceResultLuxuryCard(
                 }
             }
 
-            // Central Royal Maroon & Gold Balance Display Banner
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -850,7 +849,6 @@ private fun BalanceResultLuxuryCard(
                 }
             }
 
-            // Quota Progress Bars (Data, Voice, SMS)
             Text(
                 text = "تفاصيل الرصيد المتبقي من الباقة",
                 style = MaterialTheme.typography.titleSmall,
@@ -874,14 +872,13 @@ private fun BalanceResultLuxuryCard(
             )
 
             QuotaMeterItem(
-                icon = Icons.Default.Message,
+                icon = Icons.AutoMirrored.Filled.Message,
                 title = "الرسائل النصية (SMS)",
                 valueText = "${record.remainingSms} رسالة متبقية من ${record.totalSms}",
                 progress = smsRatio,
                 accentColor = EmeraldSuccess
             )
 
-            // Footer metadata & Re-query button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -986,17 +983,17 @@ private fun QuotaMeterItem(
 
 @Composable
 private fun OtpVerificationModal(
-    session: OtpSessionState,
+    session: OtpSessionItem,
     otpInput: String,
     remainingSeconds: Int,
     isLoading: Boolean,
     errorMessage: String?,
     onOtpChanged: (String) -> Unit,
     onAutoFillDemo: () -> Unit,
-    onConfirmClick: Boolean = true,
     onVerifyClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val carrierAr = TelecomCarrier.fromId(session.carrierId).arabicName
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
@@ -1027,7 +1024,7 @@ private fun OtpVerificationModal(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "رقم المشترك: ${session.phoneNumber} (${session.carrier.arabicName})",
+                        text = "رقم المشترك: ${session.phoneNumber} ($carrierAr)",
                         style = MaterialTheme.typography.bodySmall,
                         color = ImperialGold
                     )
@@ -1040,12 +1037,11 @@ private fun OtpVerificationModal(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "تم إرسال رمز التحقق المكون من 6 أرقام عبر بوابة ${session.carrier.arabicName}. يقوم التطبيق بالتقاط الرمز تلقائياً فور وصول الرسالة:",
+                    text = "تم إرسال رمز التحقق المكون من 6 أرقام عبر بوابة $carrierAr. يقوم التطبيق بالتقاط الرمز تلقائياً فور وصول الرسالة:",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                // 6-Digit Visual Boxes Preview
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly
@@ -1092,7 +1088,7 @@ private fun OtpVerificationModal(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "صلاحية الرمز: ${remainingSeconds} ثانية",
+                        text = "صلاحية الرمز: $remainingSeconds ثانية",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1169,7 +1165,7 @@ private fun formatDataQuota(mb: Int): String {
     }
 }
 
-private fun buildSingleSubscriberShareText(record: QueryRecordEntity): String {
+private fun buildSingleSubscriberShareText(record: QueryRecordItem): String {
     val carrier = TelecomCarrier.fromId(record.carrierId)
     return """
         ━━━ بطاقة رصيد ${carrier.arabicName} ━━━
