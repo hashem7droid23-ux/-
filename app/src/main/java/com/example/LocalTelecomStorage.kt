@@ -5,10 +5,8 @@ import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
 
 data class QueryRecordItem(
     val id: Long,
@@ -41,7 +39,7 @@ data class OtpSessionItem(
 
 class LocalTelecomStorage(context: Context) {
     private val prefs: SharedPreferences =
-        context.applicationContext.getSharedPreferences("yemen_telecom_prefs_v2", Context.MODE_PRIVATE)
+        context.applicationContext.getSharedPreferences("yemen_telecom_real_v3", Context.MODE_PRIVATE)
 
     fun isDarkTheme(): Boolean = prefs.getBoolean("dark_theme", true)
 
@@ -55,12 +53,23 @@ class LocalTelecomStorage(context: Context) {
         prefs.edit().putString("default_carrier_id", carrierId).apply()
     }
 
+    fun getSelectedSimSlot(): Int = prefs.getInt("selected_sim_slot", 0)
+
+    fun setSelectedSimSlot(slot: Int) {
+        prefs.edit().putInt("selected_sim_slot", slot).apply()
+    }
+
+    fun getPortalBaseUrl(): String =
+        prefs.getString("portal_base_url", "https://selfcare.yemenmobile.com.ye") ?: "https://selfcare.yemenmobile.com.ye"
+
+    fun setPortalBaseUrl(url: String) {
+        prefs.edit().putString("portal_base_url", url.trim()).apply()
+    }
+
     fun loadRecords(): List<QueryRecordItem> {
         val rawJson = prefs.getString("saved_records_json", null)
         if (rawJson.isNullOrBlank()) {
-            val sample = listOf(createDefaultSampleRecord())
-            saveRecords(sample)
-            return sample
+            return emptyList()
         }
         return try {
             val arr = JSONArray(rawJson)
@@ -70,21 +79,21 @@ class LocalTelecomStorage(context: Context) {
                 list.add(
                     QueryRecordItem(
                         id = obj.optLong("id", System.currentTimeMillis() + i),
-                        phoneNumber = obj.optString("phoneNumber", "777889900"),
+                        phoneNumber = obj.optString("phoneNumber", ""),
                         carrierId = obj.optString("carrierId", "YEMEN_MOBILE"),
-                        subscriberLabel = obj.optString("subscriberLabel", "مشترك يمن موبايل"),
-                        balanceRial = obj.optDouble("balanceRial", 4850.0),
+                        subscriberLabel = obj.optString("subscriberLabel", "مشترك"),
+                        balanceRial = obj.optDouble("balanceRial", 0.0),
                         loanDebtRial = obj.optDouble("loanDebtRial", 0.0),
-                        lineStatus = obj.optString("lineStatus", "نشط - 4G VoLTE"),
-                        expiryDate = obj.optString("expiryDate", "2026/11/15"),
-                        activePackageName = obj.optString("activePackageName", "باقة مزايا ماكس الشهرية"),
-                        remainingDataMb = obj.optInt("remainingDataMb", 3840),
-                        totalDataMb = obj.optInt("totalDataMb", 5120),
-                        remainingMinutes = obj.optInt("remainingMinutes", 740),
-                        totalMinutes = obj.optInt("totalMinutes", 1000),
-                        remainingSms = obj.optInt("remainingSms", 410),
-                        totalSms = obj.optInt("totalSms", 500),
-                        verificationRef = obj.optString("verificationRef", "YM-9021"),
+                        lineStatus = obj.optString("lineStatus", ""),
+                        expiryDate = obj.optString("expiryDate", "-"),
+                        activePackageName = obj.optString("activePackageName", ""),
+                        remainingDataMb = obj.optInt("remainingDataMb", 0),
+                        totalDataMb = obj.optInt("totalDataMb", 0),
+                        remainingMinutes = obj.optInt("remainingMinutes", 0),
+                        totalMinutes = obj.optInt("totalMinutes", 0),
+                        remainingSms = obj.optInt("remainingSms", 0),
+                        totalSms = obj.optInt("totalSms", 0),
+                        verificationRef = obj.optString("verificationRef", ""),
                         timestampMillis = obj.optLong("timestampMillis", System.currentTimeMillis()),
                         isFavorite = obj.optBoolean("isFavorite", false)
                     )
@@ -92,7 +101,7 @@ class LocalTelecomStorage(context: Context) {
             }
             list.sortedByDescending { it.timestampMillis }
         } catch (_: Throwable) {
-            listOf(createDefaultSampleRecord())
+            emptyList()
         }
     }
 
@@ -127,32 +136,9 @@ class LocalTelecomStorage(context: Context) {
         }
     }
 
-    private fun createDefaultSampleRecord(): QueryRecordItem {
-        return QueryRecordItem(
-            id = 1001L,
-            phoneNumber = "777889900",
-            carrierId = "YEMEN_MOBILE",
-            subscriberLabel = "الرقم الرئيسي - يمن موبايل",
-            balanceRial = 4850.0,
-            loanDebtRial = 0.0,
-            lineStatus = "نشط - 4G VoLTE",
-            expiryDate = "2026/11/15",
-            activePackageName = "باقة مزايا ماكس الشهرية",
-            remainingDataMb = 3840,
-            totalDataMb = 5120,
-            remainingMinutes = 740,
-            totalMinutes = 1000,
-            remainingSms = 410,
-            totalSms = 500,
-            verificationRef = "YM-INIT-9021",
-            timestampMillis = System.currentTimeMillis() - 3600_000L,
-            isFavorite = true
-        )
-    }
-
     companion object {
         fun normalizeYemenPhone(raw: String): String {
-            val digits = raw.filter { it.isDigit() }
+            val digits = RealTelecomEngine.normalizeArabicDigits(raw).filter { it.isDigit() }
             return when {
                 digits.startsWith("00967") -> digits.removePrefix("00967")
                 digits.startsWith("967") && digits.length > 9 -> digits.removePrefix("967")
@@ -160,103 +146,75 @@ class LocalTelecomStorage(context: Context) {
             }
         }
 
-        fun buildVerifiedRecord(
-            session: OtpSessionItem,
-            carrierName: String,
-            chosenPackageTitle: String,
-            dataQuotaText: String,
-            voiceQuotaText: String,
-            enteredOtp: String,
-            customLabel: String
+        fun createRecordFromRealUssd(
+            phoneNumber: String,
+            carrierId: String,
+            carrierArabicName: String,
+            subscriberLabel: String,
+            ussdCode: String,
+            parsed: RealUssdParsedBalance,
+            timestampMillis: Long = System.currentTimeMillis()
         ): QueryRecordItem {
-            val cleanPhone = session.phoneNumber
-            val seed = abs(cleanPhone.hashCode())
-            val baseBalance = ((seed % 145) * 50 + 450).toDouble()
-            val loanDebt = if (seed % 4 == 0) 350.0 else 0.0
-
-            val totalDataMb = when {
-                dataQuotaText.contains("100") -> 102400
-                dataQuotaText.contains("50") -> 51200
-                dataQuotaText.contains("25") -> 25600
-                dataQuotaText.contains("12") -> 12288
-                dataQuotaText.contains("10") -> 10240
-                dataQuotaText.contains("8") -> 8192
-                dataQuotaText.contains("5") -> 5120
-                dataQuotaText.contains("3.5") -> 3584
-                dataQuotaText.contains("2") -> 2048
-                dataQuotaText.contains("1.5") -> 1536
-                dataQuotaText.contains("600") -> 600
-                else -> 1024
+            val cleanPhone = normalizeYemenPhone(phoneNumber).ifEmpty { "الشريحة المباشرة" }
+            val label = subscriberLabel.trim().ifEmpty {
+                parsed.extractedPackageTitle ?: "استعلام حقيقي ($carrierArabicName)"
             }
-            val ratio = 0.30 + ((seed % 60) / 100.0)
-            val remainingDataMb = (totalDataMb * ratio).toInt().coerceIn(50, totalDataMb)
-
-            val totalMinutes = when {
-                voiceQuotaText.contains("1000") -> 1000
-                voiceQuotaText.contains("650") -> 650
-                voiceQuotaText.contains("500") -> 500
-                voiceQuotaText.contains("450") -> 450
-                voiceQuotaText.contains("400") -> 400
-                voiceQuotaText.contains("300") -> 300
-                else -> 250
-            }
-            val remainingMinutes = (totalMinutes * ratio).toInt().coerceIn(10, totalMinutes)
-            val totalSms = 300
-            val remainingSms = (totalSms * ratio).toInt().coerceIn(10, totalSms)
-
-            val calendar = Calendar.getInstance()
-            calendar.add(Calendar.DAY_OF_YEAR, (seed % 24) + 5)
-            val expiryStr = SimpleDateFormat("yyyy/MM/dd", Locale.US).format(calendar.time)
-
-            val label = customLabel.trim().ifEmpty {
-                "مشترك $carrierName (${cleanPhone.takeLast(4)})"
-            }
+            val dataMb = parsed.extractedDataMb ?: 0
+            val minutes = parsed.extractedMinutes ?: 0
+            val sms = parsed.extractedSms ?: 0
 
             return QueryRecordItem(
                 id = System.currentTimeMillis(),
                 phoneNumber = cleanPhone,
-                carrierId = session.carrierId,
+                carrierId = carrierId,
                 subscriberLabel = label,
-                balanceRial = baseBalance,
-                loanDebtRial = loanDebt,
-                lineStatus = "نشط - 4G VoLTE",
-                expiryDate = expiryStr,
-                activePackageName = chosenPackageTitle,
-                remainingDataMb = remainingDataMb,
-                totalDataMb = totalDataMb,
-                remainingMinutes = remainingMinutes,
-                totalMinutes = totalMinutes,
-                remainingSms = remainingSms,
-                totalSms = totalSms,
-                verificationRef = "${session.sessionToken}-${enteredOtp.take(4)}",
-                timestampMillis = System.currentTimeMillis(),
+                balanceRial = parsed.extractedBalanceRial ?: 0.0,
+                loanDebtRial = parsed.extractedLoanRial ?: 0.0,
+                lineStatus = "رد الشبكة الحقيقي ($ussdCode)",
+                expiryDate = parsed.extractedExpiryDate ?: RealTelecomEngine.todayDateFormatted(),
+                activePackageName = parsed.rawUssdResponse,
+                remainingDataMb = dataMb,
+                totalDataMb = if (dataMb > 0) dataMb else 0,
+                remainingMinutes = minutes,
+                totalMinutes = if (minutes > 0) minutes else 0,
+                remainingSms = sms,
+                totalSms = if (sms > 0) sms else 0,
+                verificationRef = "REAL-${System.currentTimeMillis().toString().takeLast(6)}",
+                timestampMillis = timestampMillis,
                 isFavorite = false
             )
         }
 
-        fun formatExportText(records: List<QueryRecordItem>, carrierNameResolver: (String) -> String, asCsv: Boolean): String {
+        fun formatExportText(
+            records: List<QueryRecordItem>,
+            carrierNameResolver: (String) -> String,
+            asCsv: Boolean
+        ): String {
             val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
             if (asCsv) {
                 val sb = StringBuilder()
-                sb.append("رقم الهاتف,الشبكة,اسم المشترك,الرصيد (ريال),الباقة الفعالة,البيانات المتبقية (MB),الدقائق المتبقية,تاريخ الانتهاء,وقت الاستعلام\n")
+                sb.append("رقم الهاتف,الشبكة,اسم المشترك,الرصيد المستخرج (ريال),رد الشبكة الفعلي,تاريخ الصلاحية,وقت الاستعلام\n")
                 records.forEach { rec ->
                     val cName = carrierNameResolver(rec.carrierId)
                     val dStr = dateFormat.format(Date(rec.timestampMillis))
-                    sb.append("${rec.phoneNumber},$cName,${rec.subscriberLabel},${rec.balanceRial.toInt()},${rec.activePackageName},${rec.remainingDataMb},${rec.remainingMinutes},${rec.expiryDate},$dStr\n")
+                    val sanitizedResponse = rec.activePackageName.replace("\n", " ").replace(",", " - ")
+                    sb.append("${rec.phoneNumber},$cName,${rec.subscriberLabel},${rec.balanceRial.toInt()},$sanitizedResponse,${rec.expiryDate},$dStr\n")
                 }
                 return sb.toString()
             } else {
                 val sb = StringBuilder()
-                sb.append("━━━ تقرير سجل رصيد يمن موبايل والشبكات اليمنية ━━━\n")
-                sb.append("إجمالي العمليات المحفوظة: ${records.size}\n\n")
+                sb.append("━━━ تقرير سجل الاستعلام الحقيقي للشبكات اليمنية ━━━\n")
+                sb.append("إجمالي العمليات المسجلة: ${records.size}\n\n")
                 records.forEachIndexed { idx, rec ->
                     val cName = carrierNameResolver(rec.carrierId)
                     val dStr = dateFormat.format(Date(rec.timestampMillis))
-                    sb.append("${idx + 1}. الرقم: ${rec.phoneNumber} ($cName)\n")
-                    sb.append("   • المشترك: ${rec.subscriberLabel}\n")
-                    sb.append("   • الرصيد الأساسي: ${rec.balanceRial.toInt()} ريال يمني\n")
-                    sb.append("   • الباقة: ${rec.activePackageName} (متبقي ${rec.remainingDataMb} ميجابايت / ${rec.remainingMinutes} دقيقة)\n")
-                    sb.append("   • الصلاحية حتى: ${rec.expiryDate} | فحص بتاريخ: $dStr\n")
+                    sb.append("${idx + 1}. الرقم/الشريحة: ${rec.phoneNumber} ($cName)\n")
+                    sb.append("   • الوصف: ${rec.subscriberLabel}\n")
+                    if (rec.balanceRial > 0.0) {
+                        sb.append("   • الرصيد المستخرج: ${rec.balanceRial} ريال يمني\n")
+                    }
+                    sb.append("   • رد الشبكة النصي الكامل:\n     \"${rec.activePackageName}\"\n")
+                    sb.append("   • التاريخ: $dStr\n")
                     sb.append("──────────────────────────────────────\n")
                 }
                 return sb.toString()

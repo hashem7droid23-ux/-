@@ -1,8 +1,6 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
@@ -30,21 +28,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Message
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AccountBalanceWallet
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Dialpad
-import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.SettingsEthernet
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.SimCard
-import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -53,28 +54,29 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -84,6 +86,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.OtpSessionItem
 import com.example.QueryRecordItem
+import com.example.RealInboxSmsItem
+import com.example.RealSimSlotInfo
 import com.example.data.TelecomCarrier
 import com.example.ui.theme.DeepMaroon
 import com.example.ui.theme.EmeraldSuccess
@@ -98,10 +102,18 @@ import java.util.Locale
 @Composable
 fun QueryDashboardScreen(
     selectedCarrier: TelecomCarrier,
+    selectedSimSlot: Int,
+    detectedSimCards: List<RealSimSlotInfo>,
     autoDetectedCarrier: Boolean,
     phoneInput: String,
     subscriberLabelInput: String,
+    customUssdCodeInput: String,
+    rawSmsOrUssdPasteInput: String,
+    portalBaseUrlInput: String,
     isLoading: Boolean,
+    isWaitingForRealSmsReply: Boolean,
+    lastAutoReceivedSmsInfo: String?,
+    inboxCarrierMessages: List<RealInboxSmsItem>,
     errorMessage: String?,
     latestResult: QueryRecordItem?,
     activeOtpSession: OtpSessionItem?,
@@ -109,16 +121,26 @@ fun QueryDashboardScreen(
     otpRemainingSeconds: Int,
     favoriteRecords: List<QueryRecordItem>,
     onCarrierSelected: (TelecomCarrier) -> Unit,
+    onSimSlotSelected: (Int) -> Unit,
     onPhoneChanged: (String) -> Unit,
     onLabelChanged: (String) -> Unit,
-    onPortalQueryClick: () -> Unit,
+    onCustomUssdCodeChanged: (String) -> Unit,
+    onRawSmsPasteChanged: (String) -> Unit,
+    onParseSmsTextClick: () -> Unit,
+    onPasteFromClipboard: () -> Unit,
+    onPortalBaseUrlChanged: (String) -> Unit,
+    onLiveSimUssdQueryClick: (String) -> Unit,
+    onSendDirectRealSmsInquiryClick: () -> Unit,
+    onScanRealSmsInboxClick: () -> Unit,
+    onSelectInboxSmsItem: (RealInboxSmsItem) -> Unit,
     onDialUssdClick: (String) -> Unit,
+    onSendSmsInquiryClick: (String, String) -> Unit,
+    onPortalQueryClick: () -> Unit,
     onCopyText: (String, String) -> Unit,
     onShareReport: (String) -> Unit,
     onToggleFavorite: (QueryRecordItem) -> Unit,
     onSelectFavoriteRecord: (QueryRecordItem) -> Unit,
     onOtpInputChanged: (String) -> Unit,
-    onAutoFillOtp: () -> Unit,
     onConfirmOtp: () -> Unit,
     onDismissOtp: () -> Unit,
     modifier: Modifier = Modifier
@@ -130,6 +152,7 @@ fun QueryDashboardScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // 1. Hero Header & Carrier Switcher
         item {
             LuxuryCarrierHeroBanner(
                 selectedCarrier = selectedCarrier,
@@ -138,6 +161,18 @@ fun QueryDashboardScreen(
             )
         }
 
+        // 2. Live Incoming SMS Auto-Capture Banner (if a real SMS was just intercepted)
+        if (isWaitingForRealSmsReply || !lastAutoReceivedSmsInfo.isNullOrBlank()) {
+            item {
+                LiveSmsReceiverStatusBanner(
+                    isWaiting = isWaitingForRealSmsReply,
+                    lastReceivedMessage = lastAutoReceivedSmsInfo,
+                    carrierName = selectedCarrier.arabicName
+                )
+            }
+        }
+
+        // 3. Favorite Numbers Quick Row
         if (favoriteRecords.isNotEmpty()) {
             item {
                 FavoriteNumbersQuickRow(
@@ -147,19 +182,45 @@ fun QueryDashboardScreen(
             }
         }
 
+        // 4. Real SIM Card USSD + Direct SMS Inquiry + Inbox Scanner Card
         item {
-            SmartPhoneQueryCard(
+            RealSimAndNetworkQueryCard(
                 carrier = selectedCarrier,
+                selectedSimSlot = selectedSimSlot,
+                detectedSimCards = detectedSimCards,
                 phoneInput = phoneInput,
                 subscriberLabel = subscriberLabelInput,
+                customUssdCodeInput = customUssdCodeInput,
+                portalBaseUrl = portalBaseUrlInput,
                 isLoading = isLoading,
+                isWaitingForRealSmsReply = isWaitingForRealSmsReply,
+                onSimSlotSelected = onSimSlotSelected,
                 onPhoneChanged = onPhoneChanged,
                 onLabelChanged = onLabelChanged,
-                onPortalQueryClick = onPortalQueryClick,
-                onDialUssdClick = { onDialUssdClick(selectedCarrier.balanceUssd) }
+                onCustomUssdCodeChanged = onCustomUssdCodeChanged,
+                onPortalBaseUrlChanged = onPortalBaseUrlChanged,
+                onLiveSimUssdBalanceClick = { onLiveSimUssdQueryClick(selectedCarrier.balanceUssd) },
+                onLiveSimUssdPackagesClick = { onLiveSimUssdQueryClick(selectedCarrier.packagesUssd) },
+                onRunCustomUssdClick = {
+                    val code = customUssdCodeInput.ifBlank { selectedCarrier.balanceUssd }
+                    onLiveSimUssdQueryClick(code)
+                },
+                onSendDirectRealSmsInquiryClick = onSendDirectRealSmsInquiryClick,
+                onScanRealSmsInboxClick = onScanRealSmsInboxClick,
+                onDialUssdClick = { onDialUssdClick(selectedCarrier.balanceUssd) },
+                onSendSmsInquiryClick = {
+                    when (selectedCarrier) {
+                        TelecomCarrier.YEMEN_MOBILE -> onSendSmsInquiryClick("181", "رصيد")
+                        TelecomCarrier.SABAFON -> onSendSmsInquiryClick("211", "رصيد")
+                        TelecomCarrier.YOU -> onSendSmsInquiryClick("111", "رصيد")
+                        TelecomCarrier.YEMEN_NET -> onSendSmsInquiryClick("114", "رصيد")
+                    }
+                },
+                onPortalQueryClick = onPortalQueryClick
             )
         }
 
+        // 5. Real Result Card (Shows the real USSD or real SMS balance response)
         latestResult?.let { result ->
             item {
                 BalanceResultLuxuryCard(
@@ -169,12 +230,33 @@ fun QueryDashboardScreen(
                         val reportText = buildSingleSubscriberShareText(result)
                         onShareReport(reportText)
                     },
-                    onCopyPhone = {
-                        onCopyText(result.phoneNumber, "تم نسخ رقم الهاتف ${result.phoneNumber}")
+                    onCopyResponse = {
+                        onCopyText(result.activePackageName, "تم نسخ رد الشبكة الكامل إلى الحافظة")
                     },
-                    onRequery = onPortalQueryClick
+                    onRequery = { onLiveSimUssdQueryClick(selectedCarrier.balanceUssd) }
                 )
             }
+        }
+
+        // 6. Real SMS Inbox Messages Card (Shows real telecom SMS messages read from the phone's inbox)
+        if (inboxCarrierMessages.isNotEmpty()) {
+            item {
+                RealInboxMessagesCard(
+                    messages = inboxCarrierMessages,
+                    onSelectMessage = onSelectInboxSmsItem
+                )
+            }
+        }
+
+        // 7. Real SMS / USSD Response Analyzer Card (Paste any carrier SMS from 181/121 to extract & archive)
+        item {
+            RealSmsParserCard(
+                carrier = selectedCarrier,
+                rawText = rawSmsOrUssdPasteInput,
+                onRawTextChanged = onRawSmsPasteChanged,
+                onPasteClipboardClick = onPasteFromClipboard,
+                onAnalyzeAndSaveClick = onParseSmsTextClick
+            )
         }
     }
 
@@ -186,10 +268,77 @@ fun QueryDashboardScreen(
             isLoading = isLoading,
             errorMessage = errorMessage,
             onOtpChanged = onOtpInputChanged,
-            onAutoFillDemo = onAutoFillOtp,
             onVerifyClick = onConfirmOtp,
             onDismiss = onDismissOtp
         )
+    }
+}
+
+@Composable
+private fun LiveSmsReceiverStatusBanner(
+    isWaiting: Boolean,
+    lastReceivedMessage: String?,
+    carrierName: String
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("live_sms_receiver_banner"),
+        shape = RoundedCornerShape(18.dp),
+        color = if (isWaiting) RoyalMaroon.copy(alpha = 0.22f) else EmeraldSuccess.copy(alpha = 0.16f),
+        border = BorderStroke(
+            1.dp,
+            if (isWaiting) ImperialGold else EmeraldSuccess
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            if (isWaiting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    color = ImperialGold,
+                    strokeWidth = 2.5.dp
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "مستقبل الرسائل الحقيقي نشط الآن...",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = SoftChampagneGold
+                    )
+                    Text(
+                        text = "بانتظار وصول رسالة الرد الفعلية من شبكة $carrierName ليتم قراءتها وعرض الرصيد تلقائياً",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                Icon(
+                    imageVector = Icons.Default.MarkEmailRead,
+                    contentDescription = null,
+                    tint = EmeraldSuccess,
+                    modifier = Modifier.size(24.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "استلام حقيقي مباشر من الشبكة",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = EmeraldSuccess
+                    )
+                    Text(
+                        text = lastReceivedMessage.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -284,13 +433,13 @@ private fun LuxuryCarrierHeroBanner(
                         }
                         Column {
                             Text(
-                                text = "بوابة ${selectedCarrier.arabicName}",
+                                text = "استعلام ${selectedCarrier.arabicName} الحقيقي",
                                 style = MaterialTheme.typography.headlineMedium,
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "البادئات المدعومة: ${selectedCarrier.prefixes.joinToString(" • ")} | ${selectedCarrier.shortTag}",
+                                text = "قراءة حقيقية من الشريحة (${selectedCarrier.balanceUssd}) والرسائل (${selectedCarrier.customerServiceNumber})",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = SoftChampagneGold.copy(alpha = 0.9f)
                             )
@@ -325,7 +474,7 @@ private fun LuxuryCarrierHeroBanner(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
-                    text = "اختر الشبكة أو أدخل الرقم للتعرف التلقائي:",
+                    text = "اختر شبكة شريحتك الحالية:",
                     style = MaterialTheme.typography.labelMedium,
                     color = Color.White.copy(alpha = 0.85f)
                 )
@@ -374,6 +523,568 @@ private fun LuxuryCarrierHeroBanner(
 }
 
 @Composable
+private fun RealSimAndNetworkQueryCard(
+    carrier: TelecomCarrier,
+    selectedSimSlot: Int,
+    detectedSimCards: List<RealSimSlotInfo>,
+    phoneInput: String,
+    subscriberLabel: String,
+    customUssdCodeInput: String,
+    portalBaseUrl: String,
+    isLoading: Boolean,
+    isWaitingForRealSmsReply: Boolean,
+    onSimSlotSelected: (Int) -> Unit,
+    onPhoneChanged: (String) -> Unit,
+    onLabelChanged: (String) -> Unit,
+    onCustomUssdCodeChanged: (String) -> Unit,
+    onPortalBaseUrlChanged: (String) -> Unit,
+    onLiveSimUssdBalanceClick: () -> Unit,
+    onLiveSimUssdPackagesClick: () -> Unit,
+    onRunCustomUssdClick: () -> Unit,
+    onSendDirectRealSmsInquiryClick: () -> Unit,
+    onScanRealSmsInboxClick: () -> Unit,
+    onDialUssdClick: () -> Unit,
+    onSendSmsInquiryClick: () -> Unit,
+    onPortalQueryClick: () -> Unit
+) {
+    var showAdvancedPortalConfig by remember { mutableStateOf(false) }
+
+    val InquirySmsNumber = when (carrier) {
+        TelecomCarrier.YEMEN_MOBILE -> "181"
+        TelecomCarrier.SABAFON -> "211"
+        TelecomCarrier.YOU -> "111"
+        TelecomCarrier.YEMEN_NET -> "114"
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("smart_phone_query_card"),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, ImperialGold.copy(alpha = 0.45f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CellTower,
+                        contentDescription = null,
+                        tint = ImperialGold
+                    )
+                    Text(
+                        text = "الاستعلام والاستلام الحقيقي من الشريحة",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                // Dual SIM Selector (SIM 1 / SIM 2 with real carrier names if detected)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0, 1).forEach { slot ->
+                        val simInfo = detectedSimCards.firstOrNull { it.slotIndex == slot }
+                        val chipLabel = if (simInfo != null && simInfo.carrierName.isNotBlank()) {
+                            "شريحة ${slot + 1}: ${simInfo.carrierName.take(10)}"
+                        } else {
+                            "شريحة ${slot + 1}"
+                        }
+                        FilterChip(
+                            selected = selectedSimSlot == slot,
+                            onClick = { onSimSlotSelected(slot) },
+                            label = { Text(chipLabel, style = MaterialTheme.typography.labelSmall) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = RoyalMaroon,
+                                selectedLabelColor = SoftChampagneGold
+                            )
+                        )
+                    }
+                }
+            }
+
+            // 1. Primary Real Action: Read live USSD response inside the app via TelephonyManager.sendUssdRequest
+            Button(
+                onClick = onLiveSimUssdBalanceClick,
+                enabled = !isLoading,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .testTag("live_sim_ussd_button"),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = RoyalMaroon,
+                    contentColor = Color.White
+                )
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        color = SoftChampagneGold,
+                        strokeWidth = 2.5.dp
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("جاري الاتصال الحقيقي بالشريحة...")
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.SimCard,
+                        contentDescription = null,
+                        tint = SoftChampagneGold,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "استعلام حقيقي عبر USSD مباشر (${carrier.balanceUssd})",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
+
+            // 2. Real Direct SMS Inquiry + Real Automatic Incoming SMS Receiver
+            Button(
+                onClick = onSendDirectRealSmsInquiryClick,
+                enabled = !isLoading,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .testTag("real_direct_sms_inquiry_button"),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF1F4E3D),
+                    contentColor = Color.White
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = null,
+                    tint = SoftChampagneGold,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isWaitingForRealSmsReply) {
+                        "بانتظار استلام رد ($InquirySmsNumber) الحقيقي تلقائياً..."
+                    } else {
+                        "إرسال رسالة رصيد حقيقية إلى ($InquirySmsNumber) واستلام الرد تلقائياً"
+                    },
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+
+            // 3. Real SMS Inbox Reader Button (Reads actual carrier SMS messages stored on the device)
+            FilledTonalButton(
+                onClick = onScanRealSmsInboxClick,
+                enabled = !isLoading,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("scan_real_sms_inbox_button"),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Inbox,
+                    contentDescription = null,
+                    tint = ImperialGold,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "قراءة رسائل الرصيد الحقيقية من صندوق رسائل الهاتف (SMS Inbox)",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+
+            // Secondary Real Actions Row: Live Packages USSD + Direct System Dialer + System SMS App
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onLiveSimUssdPackagesClick,
+                    enabled = !isLoading,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, ImperialGold)
+                ) {
+                    Text(
+                        text = "باقات (${carrier.packagesUssd})",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ImperialGold,
+                        maxLines = 1
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onDialUssdClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .testTag("ussd_direct_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Call,
+                        contentDescription = null,
+                        tint = ImperialGold,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "لوحة ${carrier.balanceUssd}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onSendSmsInquiryClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Sms,
+                        contentDescription = null,
+                        tint = ImperialGold,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "تطبيق الرسائل",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            // Custom USSD Live Runner Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = customUssdCodeInput,
+                    onValueChange = onCustomUssdCodeChanged,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("custom_ussd_input"),
+                    label = { Text("تنفيذ أي كود USSD مخصص (مثال: *181# أو *121#)") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp)
+                )
+                Button(
+                    onClick = onRunCustomUssdClick,
+                    enabled = !isLoading,
+                    modifier = Modifier.height(54.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = RoyalMaroon,
+                        contentColor = SoftChampagneGold
+                    )
+                ) {
+                    Text("إرسال الكود")
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+
+            // Optional Phone Number & Label for Archiving / Portal OTP
+            OutlinedTextField(
+                value = phoneInput,
+                onValueChange = onPhoneChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("phone_number_input"),
+                label = { Text("رقم الهاتف للحفظ في السجل أو استعلام البوابة (${carrier.prefixes.joinToString("/")})") },
+                placeholder = { Text("أدخل رقمك الحقيقي (مثال: 77xxxxxxx)") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Dialpad,
+                        contentDescription = "رقم الهاتف",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                shape = RoundedCornerShape(16.dp)
+            )
+
+            OutlinedTextField(
+                value = subscriberLabel,
+                onValueChange = onLabelChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("subscriber_label_input"),
+                label = { Text("اسم المشترك أو ملاحظة السجل (اختياري)") },
+                placeholder = { Text("مثال: شريحتي الأساسية") },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp)
+            )
+
+            // Portal API section (expandable)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = { showAdvancedPortalConfig = !showAdvancedPortalConfig }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SettingsEthernet,
+                        contentDescription = null,
+                        tint = ImperialGold,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (showAdvancedPortalConfig) "إخفاء إعدادات بوابة API" else "استعلام عبر بوابة الإنترنت (OTP API)",
+                        color = ImperialGold
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = showAdvancedPortalConfig) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = portalBaseUrl,
+                        onValueChange = onPortalBaseUrlChanged,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("رابط خادم البوابة (Server API URL)") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp)
+                    )
+
+                    FilledTonalButton(
+                        onClick = onPortalQueryClick,
+                        enabled = !isLoading,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("portal_query_button"),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("إرسال طلب OTP حقيقي إلى الخادم (مع التقاط الرسالة تلقائياً)")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RealInboxMessagesCard(
+    messages: List<RealInboxSmsItem>,
+    onSelectMessage: (RealInboxSmsItem) -> Unit
+) {
+    val dateFormat = SimpleDateFormat("yyyy/MM/dd • hh:mm a", Locale.US)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("real_inbox_messages_card"),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, ImperialGold.copy(alpha = 0.5f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Inbox,
+                    contentDescription = null,
+                    tint = ImperialGold
+                )
+                Column {
+                    Text(
+                        text = "رسائل الشبكة الحقيقية في هاتفك (${messages.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "اضغط على أي رسالة حقيقية لعرض تفاصيل الرصيد والباقة المستخرجة منها",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            messages.take(6).forEach { msg ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onSelectMessage(msg) },
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "المرسل: ${msg.sender}",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = ImperialGold,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = dateFormat.format(Date(msg.timestampMillis)),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            text = msg.body,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (msg.parsed.extractedBalanceRial != null) {
+                            Text(
+                                text = "الرصيد المستخرج: ${msg.parsed.extractedBalanceRial} ريال يمني",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = EmeraldSuccess,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RealSmsParserCard(
+    carrier: TelecomCarrier,
+    rawText: String,
+    onRawTextChanged: (String) -> Unit,
+    onPasteClipboardClick: () -> Unit,
+    onAnalyzeAndSaveClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("real_sms_parser_card"),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Message,
+                        contentDescription = null,
+                        tint = ImperialGold
+                    )
+                    Column {
+                        Text(
+                            text = "محلل رسائل الرصيد الحقيقية (SMS / USSD)",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "الصق نص رسالة الرصيد الواردة من ${carrier.arabicName} لاستخراج الرصيد والصلاحية وأرشفتها",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = rawText,
+                onValueChange = onRawTextChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("sms_paste_input"),
+                label = { Text("نص رسالة الشبكة الفعلي") },
+                placeholder = { Text("مثال: رصيدك الحالي هو 2450 ريال وينتهي بتاريخ 2026/12/01...") },
+                minLines = 2,
+                maxLines = 4,
+                shape = RoundedCornerShape(14.dp)
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onPasteClipboardClick,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("لصق من الحافظة")
+                }
+
+                Button(
+                    onClick = onAnalyzeAndSaveClick,
+                    modifier = Modifier.weight(1.2f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = RoyalMaroon,
+                        contentColor = SoftChampagneGold
+                    )
+                ) {
+                    Text("تحليل وحفظ في السجل")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun FavoriteNumbersQuickRow(
     favorites: List<QueryRecordItem>,
     onSelect: (QueryRecordItem) -> Unit
@@ -393,7 +1104,7 @@ private fun FavoriteNumbersQuickRow(
                 modifier = Modifier.size(18.dp)
             )
             Text(
-                text = "الأرقام المفضلة للاستعلام السريع",
+                text = "السجلات المفضلة المحفوظة",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onBackground
             )
@@ -446,202 +1157,17 @@ private fun FavoriteNumbersQuickRow(
 }
 
 @Composable
-private fun SmartPhoneQueryCard(
-    carrier: TelecomCarrier,
-    phoneInput: String,
-    subscriberLabel: String,
-    isLoading: Boolean,
-    onPhoneChanged: (String) -> Unit,
-    onLabelChanged: (String) -> Unit,
-    onPortalQueryClick: () -> Unit,
-    onDialUssdClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("smart_phone_query_card"),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PhoneAndroid,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "بيانات الاستعلام المباشر",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-
-                Text(
-                    text = "بوابة ${carrier.arabicName}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = ImperialGold
-                )
-            }
-
-            OutlinedTextField(
-                value = phoneInput,
-                onValueChange = onPhoneChanged,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("phone_number_input"),
-                label = { Text("رقم المشترك (${carrier.prefixes.joinToString("/")})") },
-                placeholder = { Text("مثال: 777889900") },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.Dialpad,
-                        contentDescription = "رقم الهاتف",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                },
-                trailingIcon = {
-                    if (phoneInput.isNotEmpty()) {
-                        Text(
-                            text = "${phoneInput.length}/9",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(end = 12.dp)
-                        )
-                    }
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                shape = RoundedCornerShape(16.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                )
-            )
-
-            OutlinedTextField(
-                value = subscriberLabel,
-                onValueChange = onLabelChanged,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("subscriber_label_input"),
-                label = { Text("اسم أو ملاحظة للرقم في السجل (اختياري)") },
-                placeholder = { Text("مثال: شريحة العمل أو رقم المنزل") },
-                singleLine = true,
-                shape = RoundedCornerShape(16.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = ImperialGold,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
-                )
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Button(
-                    onClick = onPortalQueryClick,
-                    enabled = !isLoading,
-                    modifier = Modifier
-                        .weight(1.35f)
-                        .height(54.dp)
-                        .testTag("portal_query_button"),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = RoyalMaroon,
-                        contentColor = Color.White
-                    )
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            color = SoftChampagneGold,
-                            strokeWidth = 2.5.dp
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = null,
-                            tint = SoftChampagneGold,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "استعلام عبر رمز OTP",
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = onDialUssdClick,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(54.dp)
-                        .testTag("ussd_direct_button"),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.5.dp, ImperialGold)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Call,
-                        contentDescription = null,
-                        tint = ImperialGold,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "كود ${carrier.balanceUssd}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun BalanceResultLuxuryCard(
     record: QueryRecordItem,
     onToggleFavorite: () -> Unit,
     onShareReport: () -> Unit,
-    onCopyPhone: () -> Unit,
+    onCopyResponse: () -> Unit,
     onRequery: () -> Unit
 ) {
     val carrier = TelecomCarrier.fromId(record.carrierId)
     val numberFormat = NumberFormat.getNumberInstance(Locale.US)
-    val formattedBalance = numberFormat.format(record.balanceRial.toInt())
+    val formattedBalance = numberFormat.format(record.balanceRial)
     val timeFormat = SimpleDateFormat("yyyy/MM/dd - hh:mm a", Locale.US)
-
-    val dataRatio by animateFloatAsState(
-        targetValue = (record.remainingDataMb.toFloat() / record.totalDataMb.coerceAtLeast(1)).coerceIn(0f, 1f),
-        animationSpec = tween(600),
-        label = "dataRatio"
-    )
-    val voiceRatio by animateFloatAsState(
-        targetValue = (record.remainingMinutes.toFloat() / record.totalMinutes.coerceAtLeast(1)).coerceIn(0f, 1f),
-        animationSpec = tween(600),
-        label = "voiceRatio"
-    )
-    val smsRatio by animateFloatAsState(
-        targetValue = (record.remainingSms.toFloat() / record.totalSms.coerceAtLeast(1)).coerceIn(0f, 1f),
-        animationSpec = tween(600),
-        label = "smsRatio"
-    )
 
     Card(
         modifier = Modifier
@@ -685,28 +1211,12 @@ private fun BalanceResultLuxuryCard(
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = record.phoneNumber,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = ImperialGold
-                            )
-                            IconButton(
-                                onClick = onCopyPhone,
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ContentCopy,
-                                    contentDescription = "نسخ الرقم",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                            }
-                        }
+                        Text(
+                            text = record.phoneNumber,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = ImperialGold
+                        )
                     }
                 }
 
@@ -766,7 +1276,7 @@ private fun BalanceResultLuxuryCard(
                                 modifier = Modifier.size(20.dp)
                             )
                             Text(
-                                text = "الرصيد الأساسي المتوفر",
+                                text = "نتيجة رد الشبكة الحقيقي",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = SoftChampagneGold
                             )
@@ -797,87 +1307,101 @@ private fun BalanceResultLuxuryCard(
                         }
                     }
 
-                    Row(
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+                    if (record.balanceRial > 0.0) {
+                        Row(
+                            verticalAlignment = Alignment.Bottom,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = formattedBalance,
+                                style = MaterialTheme.typography.displayMedium.copy(fontSize = 34.sp),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "ريال يمني",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = ImperialGold,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+                        }
+                    }
+
+                    if (record.loanDebtRial > 0.0) {
                         Text(
-                            text = formattedBalance,
-                            style = MaterialTheme.typography.displayMedium.copy(fontSize = 34.sp),
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "ريال يمني",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = ImperialGold,
-                            modifier = Modifier.padding(bottom = 6.dp)
+                            text = "مديونية سلفني المستخرجة: ${record.loanDebtRial.toInt()} ريال",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = SoftChampagneGold
                         )
                     }
 
                     HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    Text(
+                        text = "نص رد الشبكة الفعلي الكامل:",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SoftChampagneGold
+                    )
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.Black.copy(alpha = 0.35f),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column {
-                            Text(
-                                text = "الباقة النشطة حالياً",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.7f)
-                            )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
                                 text = record.activePackageName,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = SoftChampagneGold
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White,
+                                modifier = Modifier.weight(1f)
                             )
+                            IconButton(onClick = onCopyResponse) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "نسخ النص",
+                                    tint = SoftChampagneGold,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                text = "صلاحية الباقة والخط",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.7f)
-                            )
-                            Text(
-                                text = "حتى ${record.expiryDate}",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = Color.White
-                            )
+                    }
+
+                    if (record.remainingDataMb > 0 || record.remainingMinutes > 0 || record.remainingSms > 0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            if (record.remainingDataMb > 0) {
+                                Text(
+                                    text = "الإنترنت: ${formatDataQuota(record.remainingDataMb)}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = SoftChampagneGold
+                                )
+                            }
+                            if (record.remainingMinutes > 0) {
+                                Text(
+                                    text = "الدقائق: ${record.remainingMinutes}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = SoftChampagneGold
+                                )
+                            }
+                            if (record.remainingSms > 0) {
+                                Text(
+                                    text = "الرسائل: ${record.remainingSms}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = SoftChampagneGold
+                                )
+                            }
                         }
                     }
                 }
             }
-
-            Text(
-                text = "تفاصيل الرصيد المتبقي من الباقة",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-
-            QuotaMeterItem(
-                icon = Icons.Default.Speed,
-                title = "بيانات الإنترنت (4G / ميجابايت)",
-                valueText = "${formatDataQuota(record.remainingDataMb)} متبقية من ${formatDataQuota(record.totalDataMb)}",
-                progress = dataRatio,
-                accentColor = ImperialGold
-            )
-
-            QuotaMeterItem(
-                icon = Icons.Default.SignalCellularAlt,
-                title = "دقائق الاتصال داخل الشبكة",
-                valueText = "${record.remainingMinutes} دقيقة متبقية من ${record.totalMinutes}",
-                progress = voiceRatio,
-                accentColor = MaterialTheme.colorScheme.primary
-            )
-
-            QuotaMeterItem(
-                icon = Icons.AutoMirrored.Filled.Message,
-                title = "الرسائل النصية (SMS)",
-                valueText = "${record.remainingSms} رسالة متبقية من ${record.totalSms}",
-                progress = smsRatio,
-                accentColor = EmeraldSuccess
-            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -891,7 +1415,7 @@ private fun BalanceResultLuxuryCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "آخر تحديث: ${timeFormat.format(Date(record.timestampMillis))}",
+                        text = "وقت الاستعلام: ${timeFormat.format(Date(record.timestampMillis))}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -908,75 +1432,9 @@ private fun BalanceResultLuxuryCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("تحديث الآن")
+                    Text("إعادة الفحص")
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun QuotaMeterItem(
-    icon: ImageVector,
-    title: String,
-    valueText: String,
-    progress: Float,
-    accentColor: Color
-) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = accentColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Text(
-                    text = "${(progress * 100).toInt()}%",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = accentColor,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(50)),
-                color = accentColor,
-                trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
-                strokeCap = StrokeCap.Round
-            )
-
-            Text(
-                text = valueText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
@@ -989,7 +1447,6 @@ private fun OtpVerificationModal(
     isLoading: Boolean,
     errorMessage: String?,
     onOtpChanged: (String) -> Unit,
-    onAutoFillDemo: () -> Unit,
     onVerifyClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1019,7 +1476,7 @@ private fun OtpVerificationModal(
                 }
                 Column {
                     Text(
-                        text = "التحقق الذكي عبر الرسائل (OTP)",
+                        text = "استلام رمز التحقق الحقيقي (OTP)",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -1037,38 +1494,10 @@ private fun OtpVerificationModal(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "تم إرسال رمز التحقق المكون من 6 أرقام عبر بوابة $carrierAr. يقوم التطبيق بالتقاط الرمز تلقائياً فور وصول الرسالة:",
+                    text = "سيتم التقاط رمز التحقق تلقائياً فور وصول رسالة SMS الحقيقية من $carrierAr إلى هاتفك، أو يمكنك إدخاله يدوياً:",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    for (i in 0 until 6) {
-                        val charStr = otpInput.getOrNull(i)?.toString() ?: "•"
-                        val isFilled = i < otpInput.length
-                        Surface(
-                            modifier = Modifier.size(42.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isFilled) RoyalMaroon.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
-                            border = BorderStroke(
-                                width = if (isFilled) 1.5.dp else 1.dp,
-                                color = if (isFilled) ImperialGold else MaterialTheme.colorScheme.outline
-                            )
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = charStr,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isFilled) ImperialGold else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
 
                 OutlinedTextField(
                     value = otpInput,
@@ -1076,40 +1505,17 @@ private fun OtpVerificationModal(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("otp_code_input"),
-                    label = { Text("رمز التحقق (6 أرقام)") },
+                    label = { Text("رمز التحقق الفعلي (OTP)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     shape = RoundedCornerShape(14.dp)
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "صلاحية الرمز: $remainingSeconds ثانية",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    TextButton(
-                        onClick = onAutoFillDemo,
-                        modifier = Modifier.testTag("otp_autofill_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AutoAwesome,
-                            contentDescription = null,
-                            tint = ImperialGold,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "التقاط فوري (${session.generatedOtpCode})",
-                            color = ImperialGold
-                        )
-                    }
-                }
+                Text(
+                    text = "الوقت المتبقي للجلسة: $remainingSeconds ثانية",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
 
                 AnimatedVisibility(
                     visible = errorMessage != null,
@@ -1144,7 +1550,7 @@ private fun OtpVerificationModal(
                         strokeWidth = 2.dp
                     )
                 } else {
-                    Text("تأكيد وعرض الرصيد")
+                    Text("تأكيد الرمز")
                 }
             }
         },
@@ -1168,15 +1574,12 @@ private fun formatDataQuota(mb: Int): String {
 private fun buildSingleSubscriberShareText(record: QueryRecordItem): String {
     val carrier = TelecomCarrier.fromId(record.carrierId)
     return """
-        ━━━ بطاقة رصيد ${carrier.arabicName} ━━━
-        • الرقم: ${record.phoneNumber} (${record.subscriberLabel})
-        • الرصيد الأساسي: ${record.balanceRial.toInt()} ريال يمني
-        • حالة الخط: ${record.lineStatus}
-        • الباقة الفعالة: ${record.activePackageName}
-        • الإنترنت المتبقي: ${formatDataQuota(record.remainingDataMb)}
-        • الدقائق المتبقية: ${record.remainingMinutes} دقيقة
-        • الرسائل المتبقية: ${record.remainingSms} رسالة
-        • تاريخ انتهاء الصلاحية: ${record.expiryDate}
-        • مرجع التحقق: ${record.verificationRef}
+        ━━━ نتيجة استعلام ${carrier.arabicName} الحقيقي ━━━
+        • الرقم/الشريحة: ${record.phoneNumber} (${record.subscriberLabel})
+        • الرصيد المستخرج: ${record.balanceRial} ريال يمني
+        • نص رد الشبكة الفعلي:
+        "${record.activePackageName}"
+        • الصلاحية: ${record.expiryDate}
+        • مرجع العملية: ${record.verificationRef}
     """.trimIndent()
 }

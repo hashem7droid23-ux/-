@@ -1,5 +1,6 @@
 package com.example
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -8,8 +9,10 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,8 +53,11 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -59,6 +65,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.TelecomCarrier
 import com.example.ui.AppTab
 import com.example.ui.HistoryExportScreen
 import com.example.ui.PackagesUssdScreen
@@ -98,6 +105,66 @@ fun YemenTelecomAppRoot(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+
+    var pendingUssdCodeForLiveSim by remember { mutableStateOf<String?>(null) }
+
+    // 1. Runtime Permission Launcher for CALL_PHONE + READ_PHONE_STATE + RECEIVE_SMS to execute real SIM USSD
+    val telephonyPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        viewModel.refreshDetectedSimCards(context)
+        val callGranted = permissions[Manifest.permission.CALL_PHONE] == true ||
+            RealTelecomEngine.hasCallPhonePermission(context)
+        val targetCode = pendingUssdCodeForLiveSim ?: viewModel.selectedCarrier.balanceUssd
+        if (callGranted) {
+            viewModel.executeRealSimUssdBalanceQuery(context, targetCode)
+        } else {
+            launchUssdDialer(context, targetCode) { msg ->
+                coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
+            }
+        }
+    }
+
+    // 2. Runtime Permission Launcher for Real Direct SMS Inquiry (SEND_SMS + RECEIVE_SMS + READ_SMS + READ_PHONE_STATE)
+    val directSmsInquiryPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        viewModel.refreshDetectedSimCards(context)
+        val sendGranted = permissions[Manifest.permission.SEND_SMS] == true
+        if (sendGranted || RealTelecomEngine.hasSmsPermissions(context)) {
+            viewModel.sendRealSmsBalanceInquiry(context)
+        } else {
+            val (num, body) = when (viewModel.selectedCarrier) {
+                TelecomCarrier.YEMEN_MOBILE -> "181" to "رصيد"
+                TelecomCarrier.SABAFON -> "211" to "رصيد"
+                TelecomCarrier.YOU -> "111" to "رصيد"
+                TelecomCarrier.YEMEN_NET -> "114" to "رصيد"
+            }
+            launchSmsInquiry(context, num, body)
+        }
+    }
+
+    // 3. Runtime Permission Launcher for Reading Real Carrier SMS Inbox (READ_SMS + RECEIVE_SMS)
+    val inboxReaderPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val readGranted = permissions[Manifest.permission.READ_SMS] == true ||
+            RealTelecomEngine.hasReadSmsPermission(context)
+        if (readGranted) {
+            viewModel.scanRealSmsInbox(context)
+        } else {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("يرجى منح إذن قراءة الرسائل لقراءة رسائل 181 الحقيقية من الهاتف")
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshDetectedSimCards(context)
+        if (RealTelecomEngine.hasReadSmsPermission(context)) {
+            viewModel.scanRealSmsInbox(context)
+        }
+    }
 
     if (viewModel.currentTab != AppTab.QUERY) {
         BackHandler {
@@ -146,7 +213,7 @@ fun YemenTelecomAppRoot(
                                 color = MaterialTheme.colorScheme.onBackground
                             )
                             Text(
-                                text = "الاستعلام الذكي وخدمات الشبكات اليمنية",
+                                text = "استعلام واستلام حقيقي مباشر (USSD & SMS)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = ImperialGold
                             )
@@ -228,10 +295,18 @@ fun YemenTelecomAppRoot(
                 AppTab.QUERY -> {
                     QueryDashboardScreen(
                         selectedCarrier = viewModel.selectedCarrier,
+                        selectedSimSlot = viewModel.selectedSimSlot,
+                        detectedSimCards = viewModel.detectedSimCards,
                         autoDetectedCarrier = viewModel.autoDetectedCarrier,
                         phoneInput = viewModel.phoneInput,
                         subscriberLabelInput = viewModel.subscriberLabelInput,
+                        customUssdCodeInput = viewModel.customUssdCodeInput,
+                        rawSmsOrUssdPasteInput = viewModel.rawSmsOrUssdPasteInput,
+                        portalBaseUrlInput = viewModel.portalBaseUrlInput,
                         isLoading = viewModel.isLoading,
+                        isWaitingForRealSmsReply = viewModel.isWaitingForRealSmsReply,
+                        lastAutoReceivedSmsInfo = viewModel.lastAutoReceivedSmsInfo,
+                        inboxCarrierMessages = viewModel.inboxCarrierMessages,
                         errorMessage = viewModel.errorMessage,
                         latestResult = viewModel.latestResult,
                         activeOtpSession = viewModel.activeOtpSession,
@@ -239,13 +314,85 @@ fun YemenTelecomAppRoot(
                         otpRemainingSeconds = viewModel.otpRemainingSeconds,
                         favoriteRecords = viewModel.getFavoriteRecords(),
                         onCarrierSelected = viewModel::selectCarrier,
+                        onSimSlotSelected = viewModel::selectSimSlot,
                         onPhoneChanged = viewModel::updatePhoneInput,
                         onLabelChanged = viewModel::updateSubscriberLabelInput,
-                        onPortalQueryClick = viewModel::initiatePortalBalanceQuery,
+                        onCustomUssdCodeChanged = viewModel::updateCustomUssdCodeInput,
+                        onRawSmsPasteChanged = viewModel::updateRawSmsPasteInput,
+                        onParseSmsTextClick = {
+                            viewModel.parseAndSaveRealCarrierText(viewModel.rawSmsOrUssdPasteInput)
+                        },
+                        onPasteFromClipboard = {
+                            val pasted = readFromClipboard(context)
+                            if (pasted.isNotBlank()) {
+                                viewModel.updateRawSmsPasteInput(pasted)
+                                viewModel.parseAndSaveRealCarrierText(pasted)
+                            } else {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("الحافظة فارغة حالياً")
+                                }
+                            }
+                        },
+                        onPortalBaseUrlChanged = viewModel::updatePortalBaseUrl,
+                        onLiveSimUssdQueryClick = { ussdCode ->
+                            pendingUssdCodeForLiveSim = ussdCode
+                            if (RealTelecomEngine.hasCallPhonePermission(context)) {
+                                viewModel.executeRealSimUssdBalanceQuery(context, ussdCode)
+                            } else {
+                                telephonyPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.CALL_PHONE,
+                                        Manifest.permission.READ_PHONE_STATE,
+                                        Manifest.permission.RECEIVE_SMS
+                                    )
+                                )
+                            }
+                        },
+                        onSendDirectRealSmsInquiryClick = {
+                            if (RealTelecomEngine.hasSmsPermissions(context)) {
+                                viewModel.sendRealSmsBalanceInquiry(context)
+                            } else {
+                                directSmsInquiryPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.SEND_SMS,
+                                        Manifest.permission.RECEIVE_SMS,
+                                        Manifest.permission.READ_SMS,
+                                        Manifest.permission.READ_PHONE_STATE
+                                    )
+                                )
+                            }
+                        },
+                        onScanRealSmsInboxClick = {
+                            if (RealTelecomEngine.hasReadSmsPermission(context)) {
+                                viewModel.scanRealSmsInbox(context)
+                            } else {
+                                inboxReaderPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.READ_SMS,
+                                        Manifest.permission.RECEIVE_SMS
+                                    )
+                                )
+                            }
+                        },
+                        onSelectInboxSmsItem = viewModel::selectInboxSmsAsResult,
                         onDialUssdClick = { ussdCode ->
                             launchUssdDialer(context, ussdCode) { msg ->
                                 coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
                             }
+                        },
+                        onSendSmsInquiryClick = { number, body ->
+                            launchSmsInquiry(context, number, body)
+                        },
+                        onPortalQueryClick = {
+                            if (!RealTelecomEngine.hasReadSmsPermission(context)) {
+                                inboxReaderPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.RECEIVE_SMS,
+                                        Manifest.permission.READ_SMS
+                                    )
+                                )
+                            }
+                            viewModel.initiateRealPortalOtpRequest()
                         },
                         onCopyText = { text, feedback ->
                             copyToClipboard(context, text)
@@ -257,8 +404,7 @@ fun YemenTelecomAppRoot(
                         onToggleFavorite = viewModel::toggleFavoriteRecord,
                         onSelectFavoriteRecord = viewModel::selectRecordForInspection,
                         onOtpInputChanged = viewModel::updateOtpInput,
-                        onAutoFillOtp = viewModel::autoFillDemoOtp,
-                        onConfirmOtp = viewModel::confirmOtpAndFetchResult,
+                        onConfirmOtp = viewModel::confirmRealOtpAndFetchResult,
                         onDismissOtp = viewModel::dismissOtpDialog
                     )
                 }
@@ -274,8 +420,13 @@ fun YemenTelecomAppRoot(
                         onCategorySelected = viewModel::selectPackageCategory,
                         onSearchChanged = viewModel::updatePackageSearch,
                         onDialUssd = { code ->
-                            launchUssdDialer(context, code) { msg ->
-                                coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
+                            pendingUssdCodeForLiveSim = code
+                            if (RealTelecomEngine.hasCallPhonePermission(context)) {
+                                viewModel.executeRealSimUssdBalanceQuery(context, code)
+                            } else {
+                                launchUssdDialer(context, code) { msg ->
+                                    coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
+                                }
                             }
                         },
                         onCopyCode = { code, msg ->
@@ -350,9 +501,26 @@ private fun launchUssdDialer(
     }
 }
 
+private fun launchSmsInquiry(context: Context, phoneNumber: String, messageBody: String) {
+    try {
+        val smsIntent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$phoneNumber")).apply {
+            putExtra("sms_body", messageBody)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(smsIntent)
+    } catch (_: Exception) {
+    }
+}
+
 private fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
     clipboard?.setPrimaryClip(ClipData.newPlainText("yemen_telecom_clip", text))
+}
+
+private fun readFromClipboard(context: Context): String {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    val item = clipboard?.primaryClip?.getItemAt(0)
+    return item?.text?.toString().orEmpty()
 }
 
 private fun sharePlainText(context: Context, title: String, content: String) {
