@@ -84,12 +84,14 @@ fun QueryScreen(
     sabafonVerifyPath: String,
     sabafonBalancePath: String,
     sabafonPackagesPath: String,
+    diagnosticLog: String,
     onPhoneChanged: (String) -> Unit,
     onQueryClick: () -> Unit,
     onVersionTap: () -> Unit,
     onToggleDemoMode: (Boolean) -> Unit,
     onSaveDeveloperPaths: (String, String, String) -> Unit,
     onResetDeveloperPaths: () -> Unit,
+    onCopyDiagnosticLog: (String) -> Unit,
     onDismissDeveloperDialog: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -352,9 +354,11 @@ fun QueryScreen(
             sabafonVerifyPath = sabafonVerifyPath,
             sabafonBalancePath = sabafonBalancePath,
             sabafonPackagesPath = sabafonPackagesPath,
+            diagnosticLog = diagnosticLog,
             onToggleDemoMode = onToggleDemoMode,
             onSavePaths = onSaveDeveloperPaths,
             onResetPaths = onResetDeveloperPaths,
+            onCopyDiagnosticLog = onCopyDiagnosticLog,
             onDismiss = onDismissDeveloperDialog
         )
     }
@@ -386,9 +390,11 @@ private fun DeveloperOptionsDialog(
     sabafonVerifyPath: String,
     sabafonBalancePath: String,
     sabafonPackagesPath: String,
+    diagnosticLog: String,
     onToggleDemoMode: (Boolean) -> Unit,
     onSavePaths: (String, String, String) -> Unit,
     onResetPaths: () -> Unit,
+    onCopyDiagnosticLog: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var verifyField by remember(sabafonVerifyPath) { mutableStateOf(sabafonVerifyPath) }
@@ -464,6 +470,38 @@ private fun DeveloperOptionsDialog(
                             label = { Text("Packages Path") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "سجل التشخيص (HTTP)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    TextButton(onClick = { onCopyDiagnosticLog(diagnosticLog) }) {
+                        Text("نسخ السجل")
+                    }
+                }
+
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = diagnosticLog,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(10.dp)
                         )
                     }
                 }

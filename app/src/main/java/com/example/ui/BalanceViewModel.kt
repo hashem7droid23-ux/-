@@ -74,14 +74,25 @@ class BalanceViewModel(
 
     private var versionTapCount = 0
     private var lastVersionTapMillis = 0L
+    private var lastAutoVerifiedOtp = ""
     private var countdownJob: Job? = null
+    private var autoVerifyJob: Job? = null
 
     private val smsOtpListener = OtpSmsListener { receivedCode ->
-        if (currentScreen == AppScreen.OTP && !isLoading) {
-            otpInput = receivedCode.take(8)
+        val clean = receivedCode.take(8)
+        if (currentScreen == AppScreen.OTP && !isLoading && clean != lastAutoVerifiedOtp) {
+            lastAutoVerifiedOtp = clean
+            otpInput = clean
             errorMessage = null
             infoMessage = "تمت قراءة رمز التحقق تلقائياً من الرسالة"
-            verifyOtp()
+            autoVerifyJob?.cancel()
+            autoVerifyJob = viewModelScope.launch {
+                // Polite pacing before calling verify so Kong gateway does not rate-limit right after SendOtp
+                delay(1200L)
+                if (currentScreen == AppScreen.OTP && !isLoading && otpInput == clean) {
+                    verifyOtp()
+                }
+            }
         }
     }
 
@@ -91,9 +102,12 @@ class BalanceViewModel(
 
     override fun onCleared() {
         countdownJob?.cancel()
+        autoVerifyJob?.cancel()
         OtpSmsBridge.unregister(smsOtpListener)
         super.onCleared()
     }
+
+    fun getDiagnosticLog(): String = apiClient.lastDiagnosticLog
 
     fun toggleDarkTheme() {
         val next = !isDarkTheme
@@ -299,6 +313,8 @@ class BalanceViewModel(
 
     fun cancelOtpAndReturn() {
         stopOtpCountdown()
+        autoVerifyJob?.cancel()
+        lastAutoVerifiedOtp = ""
         otpInput = ""
         isLoading = false
         errorMessage = null

@@ -1,6 +1,9 @@
 package com.example
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -237,12 +240,17 @@ private fun BalanceAppRoot(viewModel: BalanceViewModel) {
                         sabafonVerifyPath = viewModel.sabafonVerifyPath,
                         sabafonBalancePath = viewModel.sabafonBalancePath,
                         sabafonPackagesPath = viewModel.sabafonPackagesPath,
+                        diagnosticLog = viewModel.getDiagnosticLog(),
                         onPhoneChanged = viewModel::updatePhoneInput,
                         onQueryClick = viewModel::submitPhoneInquiry,
                         onVersionTap = viewModel::onVersionTapped,
                         onToggleDemoMode = viewModel::setDemoModeEnabled,
                         onSaveDeveloperPaths = viewModel::saveSabafonDeveloperPaths,
                         onResetDeveloperPaths = viewModel::resetSabafonDeveloperPaths,
+                        onCopyDiagnosticLog = { logText ->
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            cm?.setPrimaryClip(ClipData.newPlainText("diagnostic_log", logText))
+                        },
                         onDismissDeveloperDialog = viewModel::dismissDeveloperDialog
                     )
                 }

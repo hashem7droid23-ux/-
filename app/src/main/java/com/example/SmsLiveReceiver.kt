@@ -6,7 +6,6 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.provider.Telephony
-import com.example.data.CarrierType
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.regex.Pattern
 
@@ -16,6 +15,12 @@ fun interface OtpSmsListener {
 
 object OtpSmsBridge {
     private val listeners = CopyOnWriteArrayList<OtpSmsListener>()
+
+    @Volatile
+    private var lastDispatchedCode: String = ""
+
+    @Volatile
+    private var lastDispatchedAtMillis: Long = 0L
 
     fun register(listener: OtpSmsListener) {
         if (!listeners.contains(listener)) {
@@ -28,6 +33,13 @@ object OtpSmsBridge {
     }
 
     fun dispatchOtp(code: String) {
+        val now = System.currentTimeMillis()
+        if (code == lastDispatchedCode && (now - lastDispatchedAtMillis) < 10_000L) {
+            return
+        }
+        lastDispatchedCode = code
+        lastDispatchedAtMillis = now
+
         for (listener in listeners) {
             try {
                 listener.onOtpCodeReceived(code)
@@ -48,7 +60,7 @@ object OtpSmsBridge {
         }.toString()
 
         val patterns = listOf(
-            Pattern.compile("(?:رمز|كود|التحقق|تفعيل|code|otp|pin|verify)[^0-9]{0,20}\\b(\\d{4,8})\\b", Pattern.CASE_INSENSITIVE),
+            Pattern.compile("(?:رمز|كود|التحقق|تفعيل|code\\s*is|code|otp|pin|verify)[^0-9]{0,20}\\b(\\d{4,8})\\b", Pattern.CASE_INSENSITIVE),
             Pattern.compile("\\b(\\d{4,6})\\b")
         )
         for (pattern in patterns) {
