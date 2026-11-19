@@ -49,12 +49,12 @@ class TelecomApiClient(private val prefs: AppPreferences) {
     var lastDiagnosticLog: String = "لا توجد عمليات مسجلة بعد"
         private set
 
-    private val traceHistory = ArrayDeque<String>(24)
+    private val traceHistory = ArrayDeque<String>(44)
 
     private fun recordTrace(line: String) {
         val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         synchronized(traceHistory) {
-            if (traceHistory.size >= 20) {
+            if (traceHistory.size >= 40) {
                 traceHistory.removeFirst()
             }
             traceHistory.addLast("[$ts] $line")
@@ -359,20 +359,16 @@ class TelecomApiClient(private val prefs: AppPreferences) {
 
         val configuredVerify = normalizePath(prefs.getSabafonVerifyPath())
 
-        // High-probability ASP.NET Core AuthenticateController actions paired with SendOtp
-        // Spaced by 2.4s each and capped at 4 attempts per tap to stay safely under Kong's rate limit
+        // Untested high-probability ASP.NET Core AuthenticateController actions paired with SendOtp
+        // (Skips VerifyOtp / Login / Verify / CheckOtp / LoginWithOtp already confirmed 404 on live server)
         val candidateVerifyPaths = linkedSetOf(
             configuredVerify,
-            "/ana-sabafon-api-auth/Authenticate/Login",
-            "/ana-sabafon-api-auth/Authenticate/Verify",
-            "/ana-sabafon-api-auth/Authenticate/CheckOtp",
-            "/ana-sabafon-api-auth/Authenticate/LoginWithOtp",
-            "/ana-sabafon-api-auth/Authenticate/LoginByOtp",
+            "/ana-sabafon-api-auth/Authenticate",
             "/ana-sabafon-api-auth/Authenticate/ConfirmOtp",
             "/ana-sabafon-api-auth/Authenticate/ValidateOtp",
             "/ana-sabafon-api-auth/Authenticate/Token",
             "/ana-sabafon-api-auth/Authenticate/Authenticate"
-        ).take(4)
+        ).take(5)
 
         var lastResp: RawHttpResponse? = null
         var matchedPath: String? = null
@@ -380,11 +376,35 @@ class TelecomApiClient(private val prefs: AppPreferences) {
 
         for (path in candidateVerifyPaths) {
             ensureSabafonPacing()
-            val resp = executeRequest(
+            var resp = executeRequest(
                 method = "POST",
                 url = "$SABAFON_BASE$path",
                 jsonBody = verifyPayload
             )
+
+            // If 405 Method Not Allowed, route EXISTS — immediately retry with allowed verb (GET / PATCH / PUT)
+            if (resp.code == 405) {
+                prefs.setSabafonVerifyPath(path)
+                val allowUpper = resp.allowHeader.uppercase()
+                ensureSabafonPacing()
+                resp = when {
+                    allowUpper.contains("PATCH") -> executeRequest(
+                        method = "PATCH",
+                        url = "$SABAFON_BASE$path",
+                        jsonBody = verifyPayload
+                    )
+                    allowUpper.contains("PUT") -> executeRequest(
+                        method = "PUT",
+                        url = "$SABAFON_BASE$path",
+                        jsonBody = verifyPayload
+                    )
+                    else -> executeRequest(
+                        method = "GET",
+                        url = "$SABAFON_BASE$path?GSM=$gsm&OTP=$cleanOtp&Code=$cleanOtp"
+                    )
+                }
+            }
+
             lastResp = resp
 
             if (resp.networkError != null) {
@@ -405,7 +425,6 @@ class TelecomApiClient(private val prefs: AppPreferences) {
             // 400 / 401 / 403 / 422 proves THIS route exists on ASP.NET Core!
             if (resp.code in listOf(400, 401, 403, 422)) {
                 prefs.setSabafonVerifyPath(path)
-                // If 400 mentions a missing required field (like PhoneNumber or Username or DeviceId), try once more with extended payload
                 if (resp.code == 400 && resp.body.isNotBlank()) {
                     val retryBody = buildAdaptiveRetryPayload(gsm, phone, cleanOtp, resp.body)
                     if (retryBody != null) {
@@ -430,7 +449,7 @@ class TelecomApiClient(private val prefs: AppPreferences) {
                 )
             }
 
-            // 404 or 405 -> continue gently to next candidate path after pacing
+            // 404 -> continue gently to next candidate path after pacing
         }
 
         if (successBody == null || matchedPath == null) {
@@ -484,25 +503,38 @@ class TelecomApiClient(private val prefs: AppPreferences) {
 
     /**
      * Developer-triggered safe discovery tool (paced 2.4s apart) to probe Swagger/OpenAPI
-     * and common Ana Sabafon ASP.NET Core Authenticate routes without tripping rate limits.
+     * and untested Ana Sabafon ASP.NET Core Authenticate routes without tripping rate limits.
      */
     fun discoverSabafonEndpoints(onProgress: (String) -> Unit = {}): String {
         recordTrace("=== بدء اكتشاف مسارات سبأفون ===")
         onProgress(lastDiagnosticLog)
 
+        // Skips paths already proven 404 (VerifyOtp, Login, Verify, CheckOtp, LoginWithOtp)
         val probeTargets = listOf(
             "GET" to "/ana-sabafon-api-auth/swagger/v1/swagger.json",
-            "POST" to "/ana-sabafon-api-auth/Authenticate/Login",
-            "POST" to "/ana-sabafon-api-auth/Authenticate/Verify",
-            "POST" to "/ana-sabafon-api-auth/Authenticate/CheckOtp",
+            "GET" to "/ana-sabafon-api-auth/swagger/index.html",
+            "GET" to "/ana-sabafon-api-auth/openapi/v1.json",
+            "POST" to "/ana-sabafon-api-auth/Authenticate",
             "POST" to "/ana-sabafon-api-auth/Authenticate/ConfirmOtp",
             "POST" to "/ana-sabafon-api-auth/Authenticate/ValidateOtp",
-            "POST" to "/ana-sabafon-api-auth/Authenticate/OtpLogin",
-            "POST" to "/ana-sabafon-api-auth/Authenticate/LoginWithOtp",
-            "POST" to "/ana-sabafon-api-auth/Authenticate/VerifyCode",
             "POST" to "/ana-sabafon-api-auth/Authenticate/Token",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/GetToken",
             "POST" to "/ana-sabafon-api-auth/Authenticate/Authenticate",
-            "POST" to "/ana-sabafon-api-auth/Authenticate/VerifyOtp/967710000000/000000"
+            "POST" to "/ana-sabafon-api-auth/Authenticate/OtpLogin",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/LoginOtp",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/LoginByOtp",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/VerifyCode",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/CheckCode",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/verify-otp",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/login-otp",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/SignIn",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/Otp",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/VerifyUser",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/VerifyGsm",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/VerifyOtp/967710000000/000000",
+            "POST" to "/ana-sabafon-api-auth/Token",
+            "POST" to "/ana-sabafon-api-auth/Auth/VerifyOtp",
+            "POST" to "/ana-sabafon-api-auth/Otp/Verify"
         )
 
         val dummyBody = JSONObject().apply {
@@ -535,37 +567,32 @@ class TelecomApiClient(private val prefs: AppPreferences) {
             }
 
             if (method == "GET" && resp.code in 200..299 && resp.body.contains("\"paths\"")) {
-                try {
-                    val swagger = JSONObject(resp.body)
-                    val pathsObj = swagger.optJSONObject("paths")
-                    val keys = pathsObj?.keys()
-                    val foundPaths = mutableListOf<String>()
-                    while (keys != null && keys.hasNext()) {
-                        foundPaths.add(keys.next())
-                    }
-                    recordTrace("Swagger Paths: ${foundPaths.joinToString(", ")}")
-                    val verifyCandidate = foundPaths.firstOrNull { p ->
-                        val l = p.lowercase()
-                        (l.contains("verify") || l.contains("login") || l.contains("check") || l.contains("confirm") || l.contains("token")) &&
-                            !l.contains("sendotp")
-                    }
-                    if (!verifyCandidate.isNullOrBlank()) {
-                        val full = if (verifyCandidate.startsWith("/ana-sabafon")) {
-                            verifyCandidate
-                        } else {
-                            "/ana-sabafon-api-auth$verifyCandidate"
-                        }
-                        prefs.setSabafonVerifyPath(full)
-                        discoveredVerify = full
-                        recordTrace("تم ضبط مسار التحقق تلقائياً: $full")
-                    }
-                    onProgress(lastDiagnosticLog)
-                } catch (_: Throwable) {
-                }
+                discoveredVerify = parseSwaggerAndSaveVerifyPath(resp.body)
+                onProgress(lastDiagnosticLog)
                 break
             }
 
-            if (method == "POST" && resp.code in listOf(200, 201, 400, 401, 403, 405, 422)) {
+            if (method == "GET" && path.endsWith("index.html") && resp.code in 200..299) {
+                val jsonMatch = Regex("""["']([^"']*swagger[^"']*\.json)["']""").find(resp.body)
+                val swaggerRef = jsonMatch?.groupValues?.getOrNull(1)
+                if (!swaggerRef.isNullOrBlank()) {
+                    val resolvedUrl = when {
+                        swaggerRef.startsWith("http") -> swaggerRef
+                        swaggerRef.startsWith("/") -> "$SABAFON_BASE$swaggerRef"
+                        else -> "$SABAFON_BASE/ana-sabafon-api-auth/swagger/$swaggerRef"
+                    }
+                    ensureSabafonPacing()
+                    val docResp = executeRequest("GET", resolvedUrl)
+                    onProgress(lastDiagnosticLog)
+                    if (docResp.code in 200..299 && docResp.body.contains("\"paths\"")) {
+                        discoveredVerify = parseSwaggerAndSaveVerifyPath(docResp.body)
+                        onProgress(lastDiagnosticLog)
+                        break
+                    }
+                }
+            }
+
+            if (method == "POST" && resp.code in listOf(200, 201, 400, 401, 403, 405, 422, 500)) {
                 prefs.setSabafonVerifyPath(path)
                 discoveredVerify = path
                 recordTrace("تم اكتشاف مسار تحقق فعّال: $path (HTTP ${resp.code})")
@@ -577,6 +604,38 @@ class TelecomApiClient(private val prefs: AppPreferences) {
         recordTrace("=== انتهى الاكتشاف ===")
         onProgress(lastDiagnosticLog)
         return discoveredVerify ?: ""
+    }
+
+    private fun parseSwaggerAndSaveVerifyPath(swaggerJson: String): String? {
+        return try {
+            val swagger = JSONObject(swaggerJson)
+            val pathsObj = swagger.optJSONObject("paths")
+            val keys = pathsObj?.keys()
+            val foundPaths = mutableListOf<String>()
+            while (keys != null && keys.hasNext()) {
+                foundPaths.add(keys.next())
+            }
+            recordTrace("Swagger Paths: ${foundPaths.joinToString(", ")}")
+            val verifyCandidate = foundPaths.firstOrNull { p ->
+                val l = p.lowercase()
+                (l.contains("verify") || l.contains("login") || l.contains("check") || l.contains("confirm") || l.contains("token") || l.contains("auth")) &&
+                    !l.contains("sendotp")
+            }
+            if (!verifyCandidate.isNullOrBlank()) {
+                val full = if (verifyCandidate.startsWith("/ana-sabafon")) {
+                    verifyCandidate
+                } else {
+                    "/ana-sabafon-api-auth$verifyCandidate"
+                }
+                prefs.setSabafonVerifyPath(full)
+                recordTrace("تم ضبط مسار التحقق تلقائياً: $full")
+                full
+            } else {
+                null
+            }
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun fetchSabafonBalanceAndPackages(phone: String, token: String): InquiryFetchOutcome {
@@ -1024,6 +1083,7 @@ class TelecomApiClient(private val prefs: AppPreferences) {
         val code: Int = -1,
         val body: String = "",
         val retryAfterSeconds: Int? = null,
+        val allowHeader: String = "",
         val networkError: Throwable? = null
     )
 
@@ -1049,18 +1109,22 @@ class TelecomApiClient(private val prefs: AppPreferences) {
                 "GET" -> reqBuilder.get()
                 "POST" -> reqBuilder.post((jsonBody ?: "{}").toRequestBody(jsonMediaType))
                 "PATCH" -> reqBuilder.patch((jsonBody ?: "{}").toRequestBody(jsonMediaType))
+                "PUT" -> reqBuilder.put((jsonBody ?: "{}").toRequestBody(jsonMediaType))
                 else -> reqBuilder.method(method, jsonBody?.toRequestBody(jsonMediaType))
             }
 
             client.newCall(reqBuilder.build()).execute().use { response ->
                 val respBody = response.body?.string().orEmpty()
                 val retryAfter = response.header("Retry-After")?.trim()?.toIntOrNull()
+                val allowHeader = response.header("Allow").orEmpty()
                 val shortPath = url.substringAfter("://").substringAfter("/", "")
-                recordTrace("$method /$shortPath -> HTTP ${response.code} (${respBody.take(160)})")
+                val allowInfo = if (allowHeader.isNotBlank()) " [Allow: $allowHeader]" else ""
+                recordTrace("$method /$shortPath -> HTTP ${response.code}$allowInfo (${respBody.take(240)})")
                 RawHttpResponse(
                     code = response.code,
                     body = respBody,
-                    retryAfterSeconds = retryAfter
+                    retryAfterSeconds = retryAfter,
+                    allowHeader = allowHeader
                 )
             }
         } catch (t: Throwable) {
