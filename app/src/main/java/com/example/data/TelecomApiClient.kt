@@ -49,12 +49,12 @@ class TelecomApiClient(private val prefs: AppPreferences) {
     var lastDiagnosticLog: String = "لا توجد عمليات مسجلة بعد"
         private set
 
-    private val traceHistory = ArrayDeque<String>(12)
+    private val traceHistory = ArrayDeque<String>(24)
 
     private fun recordTrace(line: String) {
         val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         synchronized(traceHistory) {
-            if (traceHistory.size >= 10) {
+            if (traceHistory.size >= 20) {
                 traceHistory.removeFirst()
             }
             traceHistory.addLast("[$ts] $line")
@@ -81,8 +81,6 @@ class TelecomApiClient(private val prefs: AppPreferences) {
             .readTimeout(25, TimeUnit.SECONDS)
             .writeTimeout(20, TimeUnit.SECONDS)
 
-        // Telecom gateways on direct IP (82.114.168.238:6321) and custom ports (ana2.sabafon.net.ye:20005)
-        // frequently use private/self-signed TLS certificates.
         try {
             val trustManager = @SuppressLint("CustomX509TrustManager") object : X509TrustManager {
                 @SuppressLint("TrustAllX509TrustManager")
@@ -144,7 +142,6 @@ class TelecomApiClient(private val prefs: AppPreferences) {
             return InquiryStartOutcome.NeedsOtp
         }
 
-        // If already registered & verified, silently obtain token and fetch balance
         val silentToken = silentYemenMobileAuth(phone)
         if (!silentToken.isNullOrBlank()) {
             prefs.saveToken(phone, silentToken)
@@ -268,10 +265,8 @@ class TelecomApiClient(private val prefs: AppPreferences) {
 
     // ══════════════════════════════════════════════════════════════════════
     // SABAFON (https://ana2.sabafon.net.ye:20005)
-    // Strict anti-rate-limit design:
-    // - NEVER sprays multiple guessed URLs in a loop (prevents Kong 429 "API rate limit exceeded")
-    // - Enforces polite spacing between requests & respects Retry-After
-    // - Sends clean single-request calls to configured Verify / Balance / Packages endpoints
+    // Smart Paced Discovery (2.4s spacing, stops immediately on 2xx/400/401/429)
+    // Automatically saves discovered working endpoints to AppPreferences!
     // ══════════════════════════════════════════════════════════════════════
 
     private fun checkSabafonCooldown(): String? {
@@ -296,7 +291,7 @@ class TelecomApiClient(private val prefs: AppPreferences) {
     }
 
     private fun handleSabafonRateLimit(retryAfterSeconds: Int?): String {
-        val cooldownSec = (retryAfterSeconds ?: 30).coerceIn(10, 120)
+        val cooldownSec = (retryAfterSeconds ?: 25).coerceIn(10, 90)
         sabafonRateLimitedUntilMillis = System.currentTimeMillis() + (cooldownSec * 1000L)
         return buildRateLimitArabicMessage(cooldownSec)
     }
@@ -304,8 +299,6 @@ class TelecomApiClient(private val prefs: AppPreferences) {
     private fun startSabafonInquiry(phone: String): InquiryStartOutcome {
         checkSabafonCooldown()?.let { return InquiryStartOutcome.Error(it) }
 
-        // If we already hold a valid cached bearer token for this Sabafon line, try fetching directly
-        // to save an unnecessary SendOtp call against Kong's rate limit.
         val existingToken = prefs.getToken(phone)
         if (!existingToken.isNullOrBlank()) {
             val directFetch = fetchSabafonBalanceAndPackages(phone, existingToken)
@@ -349,128 +342,321 @@ class TelecomApiClient(private val prefs: AppPreferences) {
 
     private fun verifySabafonOtpAndFetch(phone: String, otpCode: String): InquiryFetchOutcome {
         checkSabafonCooldown()?.let { return InquiryFetchOutcome.Error(it) }
-        ensureSabafonPacing()
 
         val gsm = formatSabafonGsm(phone)
         val cleanOtp = otpCode.trim()
 
-        // Clean exact JSON matching Sabafon's PascalCase convention (no conflicting duplicate keys)
+        // Distinct non-colliding PascalCase keys compatible with ASP.NET Core System.Text.Json DTOs
         val verifyPayload = JSONObject().apply {
             put("GSM", gsm)
             put("OTP", cleanOtp)
+            put("Code", cleanOtp)
+            put("OtpCode", cleanOtp)
+            put("Pin", cleanOtp)
+            put("Password", cleanOtp)
+            put("VerificationCode", cleanOtp)
         }.toString()
 
-        val verifyPath = normalizePath(prefs.getSabafonVerifyPath())
-        val resp = executeRequest(
-            method = "POST",
-            url = "$SABAFON_BASE$verifyPath",
-            jsonBody = verifyPayload
-        )
+        val configuredVerify = normalizePath(prefs.getSabafonVerifyPath())
 
-        if (resp.networkError != null) {
-            return InquiryFetchOutcome.Error("تعذر الاتصال بخادم سبأفون أثناء التحقق من الرمز")
+        // High-probability ASP.NET Core AuthenticateController actions paired with SendOtp
+        // Spaced by 2.4s each and capped at 4 attempts per tap to stay safely under Kong's rate limit
+        val candidateVerifyPaths = linkedSetOf(
+            configuredVerify,
+            "/ana-sabafon-api-auth/Authenticate/Login",
+            "/ana-sabafon-api-auth/Authenticate/Verify",
+            "/ana-sabafon-api-auth/Authenticate/CheckOtp",
+            "/ana-sabafon-api-auth/Authenticate/LoginWithOtp",
+            "/ana-sabafon-api-auth/Authenticate/LoginByOtp",
+            "/ana-sabafon-api-auth/Authenticate/ConfirmOtp",
+            "/ana-sabafon-api-auth/Authenticate/ValidateOtp",
+            "/ana-sabafon-api-auth/Authenticate/Token",
+            "/ana-sabafon-api-auth/Authenticate/Authenticate"
+        ).take(4)
+
+        var lastResp: RawHttpResponse? = null
+        var matchedPath: String? = null
+        var successBody: String? = null
+
+        for (path in candidateVerifyPaths) {
+            ensureSabafonPacing()
+            val resp = executeRequest(
+                method = "POST",
+                url = "$SABAFON_BASE$path",
+                jsonBody = verifyPayload
+            )
+            lastResp = resp
+
+            if (resp.networkError != null) {
+                return InquiryFetchOutcome.Error("تعذر الاتصال بخادم سبأفون أثناء التحقق من الرمز")
+            }
+
+            if (resp.code == 429) {
+                return InquiryFetchOutcome.Error(handleSabafonRateLimit(resp.retryAfterSeconds))
+            }
+
+            if (resp.code in 200..299) {
+                matchedPath = path
+                successBody = resp.body
+                prefs.setSabafonVerifyPath(path)
+                break
+            }
+
+            // 400 / 401 / 403 / 422 proves THIS route exists on ASP.NET Core!
+            if (resp.code in listOf(400, 401, 403, 422)) {
+                prefs.setSabafonVerifyPath(path)
+                // If 400 mentions a missing required field (like PhoneNumber or Username or DeviceId), try once more with extended payload
+                if (resp.code == 400 && resp.body.isNotBlank()) {
+                    val retryBody = buildAdaptiveRetryPayload(gsm, phone, cleanOtp, resp.body)
+                    if (retryBody != null) {
+                        ensureSabafonPacing()
+                        val retryResp = executeRequest(
+                            method = "POST",
+                            url = "$SABAFON_BASE$path",
+                            jsonBody = retryBody
+                        )
+                        if (retryResp.code in 200..299) {
+                            matchedPath = path
+                            successBody = retryResp.body
+                            break
+                        }
+                        if (retryResp.code == 429) {
+                            return InquiryFetchOutcome.Error(handleSabafonRateLimit(retryResp.retryAfterSeconds))
+                        }
+                    }
+                }
+                return InquiryFetchOutcome.Error(
+                    sanitizeServerError(resp.body, "رمز التحقق غير صحيح أو منتهي الصلاحية")
+                )
+            }
+
+            // 404 or 405 -> continue gently to next candidate path after pacing
         }
 
-        if (resp.code == 429) {
-            return InquiryFetchOutcome.Error(handleSabafonRateLimit(resp.retryAfterSeconds))
-        }
-
-        if (resp.code == 404 || resp.code == 405) {
+        if (successBody == null || matchedPath == null) {
+            val statusCode = lastResp?.code ?: -1
             return InquiryFetchOutcome.Error(
-                "مسار التحقق غير مطابق على خادم سبأفون (${resp.code}) — يمكنك ضبط المسار الصحيح من قائمة المطور (5 نقرات على الإصدار)"
+                "تعذر العثور على مسار التحقق على خادم سبأفون ($statusCode) — افتح قائمة المطور (5 نقرات على الإصدار) واضغط «اكتشاف مسارات سبأفون» أو انسخ سجل التشخيص"
             )
         }
 
-        if (resp.code !in 200..299) {
-            return InquiryFetchOutcome.Error(
-                sanitizeServerError(resp.body, "رمز التحقق غير صحيح أو منتهي الصلاحية")
-            )
-        }
-
-        val token = extractTokenFromBody(resp.body)
+        val token = extractTokenFromBody(successBody)
         if (!token.isNullOrBlank()) {
             prefs.saveToken(phone, token)
-            // If verify response already included full balance & offers, return immediately without extra call!
-            if (containsBalanceFields(resp.body)) {
+            if (containsBalanceFields(successBody)) {
                 return InquiryFetchOutcome.Success(
-                    parseBalanceJson(resp.body, phone, CarrierType.SABAFON, false)
+                    parseBalanceJson(successBody, phone, CarrierType.SABAFON, false)
                 )
             }
             return fetchSabafonBalanceAndPackages(phone, token)
         }
 
-        if (containsBalanceFields(resp.body)) {
+        if (containsBalanceFields(successBody)) {
             return InquiryFetchOutcome.Success(
-                parseBalanceJson(resp.body, phone, CarrierType.SABAFON, false)
+                parseBalanceJson(successBody, phone, CarrierType.SABAFON, false)
             )
         }
 
-        return InquiryFetchOutcome.Error("تم استلام رد من سبأفون بدون رمز جلسة — راجع سجل التشخيص في قائمة المطور")
+        return InquiryFetchOutcome.Error("تم استلام رد من سبأفون ($matchedPath) بدون رمز جلسة — راجع سجل التشخيص في قائمة المطور")
+    }
+
+    private fun buildAdaptiveRetryPayload(
+        gsm: String,
+        rawPhone: String,
+        otp: String,
+        errorBody: String
+    ): String? {
+        val lower = errorBody.lowercase()
+        val obj = JSONObject().apply {
+            put("GSM", gsm)
+            put("OTP", otp)
+            put("Code", otp)
+            if (lower.contains("phonenumber") || lower.contains("phone")) put("PhoneNumber", gsm)
+            if (lower.contains("msisdn")) put("Msisdn", gsm)
+            if (lower.contains("username")) put("UserName", gsm)
+            if (lower.contains("mobile")) put("MobileNumber", rawPhone)
+            if (lower.contains("device")) put("DeviceId", "android-device-01")
+            if (lower.contains("platform") || lower.contains("os")) put("Platform", "Android")
+            if (lower.contains("lang")) put("Language", "ar")
+        }
+        return if (obj.length() > 3) obj.toString() else null
+    }
+
+    /**
+     * Developer-triggered safe discovery tool (paced 2.4s apart) to probe Swagger/OpenAPI
+     * and common Ana Sabafon ASP.NET Core Authenticate routes without tripping rate limits.
+     */
+    fun discoverSabafonEndpoints(onProgress: (String) -> Unit = {}): String {
+        recordTrace("=== بدء اكتشاف مسارات سبأفون ===")
+        onProgress(lastDiagnosticLog)
+
+        val probeTargets = listOf(
+            "GET" to "/ana-sabafon-api-auth/swagger/v1/swagger.json",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/Login",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/Verify",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/CheckOtp",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/ConfirmOtp",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/ValidateOtp",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/OtpLogin",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/LoginWithOtp",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/VerifyCode",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/Token",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/Authenticate",
+            "POST" to "/ana-sabafon-api-auth/Authenticate/VerifyOtp/967710000000/000000"
+        )
+
+        val dummyBody = JSONObject().apply {
+            put("GSM", "967710000000")
+            put("OTP", "000000")
+            put("Code", "000000")
+        }.toString()
+
+        var discoveredVerify: String? = null
+
+        for ((method, path) in probeTargets) {
+            if (System.currentTimeMillis() < sabafonRateLimitedUntilMillis) {
+                recordTrace("توقف الفحص مؤقتاً بسبب حد الطلبات (429)")
+                onProgress(lastDiagnosticLog)
+                break
+            }
+            ensureSabafonPacing()
+            val resp = executeRequest(
+                method = method,
+                url = "$SABAFON_BASE$path",
+                jsonBody = if (method == "POST") dummyBody else null
+            )
+            onProgress(lastDiagnosticLog)
+
+            if (resp.code == 429) {
+                handleSabafonRateLimit(resp.retryAfterSeconds)
+                recordTrace("تم إيقاف الفحص مؤقتاً لتفادي الحظر (429)")
+                onProgress(lastDiagnosticLog)
+                break
+            }
+
+            if (method == "GET" && resp.code in 200..299 && resp.body.contains("\"paths\"")) {
+                try {
+                    val swagger = JSONObject(resp.body)
+                    val pathsObj = swagger.optJSONObject("paths")
+                    val keys = pathsObj?.keys()
+                    val foundPaths = mutableListOf<String>()
+                    while (keys != null && keys.hasNext()) {
+                        foundPaths.add(keys.next())
+                    }
+                    recordTrace("Swagger Paths: ${foundPaths.joinToString(", ")}")
+                    val verifyCandidate = foundPaths.firstOrNull { p ->
+                        val l = p.lowercase()
+                        (l.contains("verify") || l.contains("login") || l.contains("check") || l.contains("confirm") || l.contains("token")) &&
+                            !l.contains("sendotp")
+                    }
+                    if (!verifyCandidate.isNullOrBlank()) {
+                        val full = if (verifyCandidate.startsWith("/ana-sabafon")) {
+                            verifyCandidate
+                        } else {
+                            "/ana-sabafon-api-auth$verifyCandidate"
+                        }
+                        prefs.setSabafonVerifyPath(full)
+                        discoveredVerify = full
+                        recordTrace("تم ضبط مسار التحقق تلقائياً: $full")
+                    }
+                    onProgress(lastDiagnosticLog)
+                } catch (_: Throwable) {
+                }
+                break
+            }
+
+            if (method == "POST" && resp.code in listOf(200, 201, 400, 401, 403, 405, 422)) {
+                prefs.setSabafonVerifyPath(path)
+                discoveredVerify = path
+                recordTrace("تم اكتشاف مسار تحقق فعّال: $path (HTTP ${resp.code})")
+                onProgress(lastDiagnosticLog)
+                break
+            }
+        }
+
+        recordTrace("=== انتهى الاكتشاف ===")
+        onProgress(lastDiagnosticLog)
+        return discoveredVerify ?: ""
     }
 
     private fun fetchSabafonBalanceAndPackages(phone: String, token: String): InquiryFetchOutcome {
         checkSabafonCooldown()?.let { return InquiryFetchOutcome.Error(it) }
-        ensureSabafonPacing()
 
         val gsm = formatSabafonGsm(phone)
-        val balancePath = normalizePath(prefs.getSabafonBalancePath())
-        val balanceUrl = if (balancePath.contains("?")) {
-            "$SABAFON_BASE$balancePath"
-        } else {
-            "$SABAFON_BASE$balancePath?GSM=$gsm"
-        }
+        val configuredBalance = normalizePath(prefs.getSabafonBalancePath())
+        val balanceCandidates = linkedSetOf(
+            configuredBalance,
+            "/ana-sabafon-api-subscriber/Subscriber/GetBalance",
+            "/ana-sabafon-api-balance/Balance/GetBalance",
+            "/ana-sabafon-api-inquiry/Inquiry/GetBalance",
+            "/ana-sabafon-api/Subscriber/GetBalance"
+        ).take(3)
 
-        var balanceResp = executeRequest(
-            method = "GET",
-            url = balanceUrl,
-            bearerToken = token
-        )
+        var balanceResp: RawHttpResponse? = null
+        var resolvedPath: String? = null
 
-        if (balanceResp.code == 429) {
-            return InquiryFetchOutcome.Error(handleSabafonRateLimit(balanceResp.retryAfterSeconds))
-        }
-
-        // Only if the server explicitly says 405 Method Not Allowed, send a single POST to the same exact endpoint
-        if (balanceResp.code == 405) {
+        for (path in balanceCandidates) {
             ensureSabafonPacing()
-            balanceResp = executeRequest(
-                method = "POST",
-                url = "$SABAFON_BASE$balancePath",
-                jsonBody = JSONObject().put("GSM", gsm).toString(),
-                bearerToken = token
-            )
-            if (balanceResp.code == 429) {
-                return InquiryFetchOutcome.Error(handleSabafonRateLimit(balanceResp.retryAfterSeconds))
+            val url = if (path.contains("?")) "$SABAFON_BASE$path" else "$SABAFON_BASE$path?GSM=$gsm"
+            var resp = executeRequest(method = "GET", url = url, bearerToken = token)
+
+            if (resp.code == 429) {
+                return InquiryFetchOutcome.Error(handleSabafonRateLimit(resp.retryAfterSeconds))
+            }
+
+            if (resp.code == 405) {
+                ensureSabafonPacing()
+                resp = executeRequest(
+                    method = "POST",
+                    url = "$SABAFON_BASE$path",
+                    jsonBody = JSONObject().put("GSM", gsm).toString(),
+                    bearerToken = token
+                )
+                if (resp.code == 429) {
+                    return InquiryFetchOutcome.Error(handleSabafonRateLimit(resp.retryAfterSeconds))
+                }
+            }
+
+            balanceResp = resp
+
+            if (resp.networkError != null) {
+                return InquiryFetchOutcome.Error("تعذر جلب بيانات رصيد سبأفون، يرجى التحقق من اتصال الإنترنت")
+            }
+
+            if (resp.code == 401 || resp.code == 403) {
+                prefs.clearToken(phone)
+                return InquiryFetchOutcome.NeedsReauth
+            }
+
+            if (resp.code in 200..299 && resp.body.isNotBlank()) {
+                resolvedPath = path
+                prefs.setSabafonBalancePath(path)
+                break
+            }
+
+            if (resp.code != 404) {
+                break
             }
         }
 
-        if (balanceResp.networkError != null) {
-            return InquiryFetchOutcome.Error("تعذر جلب بيانات رصيد سبأفون، يرجى التحقق من اتصال الإنترنت")
-        }
-
-        if (balanceResp.code == 401 || balanceResp.code == 403) {
-            prefs.clearToken(phone)
-            return InquiryFetchOutcome.NeedsReauth
-        }
-
-        if (balanceResp.code == 404) {
+        val finalResp = balanceResp
+        if (resolvedPath == null || finalResp == null || finalResp.code !in 200..299 || finalResp.body.isBlank()) {
+            val code = finalResp?.code ?: -1
+            if (code == 404) {
+                return InquiryFetchOutcome.Error(
+                    "تم التحقق بنجاح لكن مسار الرصيد غير مطابق (404) — عدّل مسار الرصيد من قائمة المطور"
+                )
+            }
             return InquiryFetchOutcome.Error(
-                "تم التحقق بنجاح لكن مسار الرصيد غير مطابق (404) — عدّل مسار الرصيد من قائمة المطور"
+                sanitizeServerError(finalResp?.body.orEmpty(), "تعذر قراءة تفاصيل رصيد سبأفون حالياً")
             )
         }
 
-        if (balanceResp.code !in 200..299 || balanceResp.body.isBlank()) {
-            return InquiryFetchOutcome.Error(
-                sanitizeServerError(balanceResp.body, "تعذر قراءة تفاصيل رصيد سبأفون حالياً")
-            )
-        }
-
-        val baseResult = parseBalanceJson(balanceResp.body, phone, CarrierType.SABAFON, false)
+        val baseResult = parseBalanceJson(finalResp.body, phone, CarrierType.SABAFON, false)
         if (baseResult.offers.isNotEmpty()) {
             return InquiryFetchOutcome.Success(baseResult)
         }
 
-        // Single gentle request for active packages (only if not already included in balance response)
         val packages = fetchSabafonActivePackagesSingle(gsm, token)
         return InquiryFetchOutcome.Success(baseResult.copy(offers = packages))
     }
@@ -870,7 +1056,7 @@ class TelecomApiClient(private val prefs: AppPreferences) {
                 val respBody = response.body?.string().orEmpty()
                 val retryAfter = response.header("Retry-After")?.trim()?.toIntOrNull()
                 val shortPath = url.substringAfter("://").substringAfter("/", "")
-                recordTrace("$method /$shortPath -> HTTP ${response.code} (${respBody.take(120)})")
+                recordTrace("$method /$shortPath -> HTTP ${response.code} (${respBody.take(160)})")
                 RawHttpResponse(
                     code = response.code,
                     body = respBody,
@@ -887,6 +1073,6 @@ class TelecomApiClient(private val prefs: AppPreferences) {
     companion object {
         const val YEMEN_MOBILE_BASE = "https://82.114.168.238:6321"
         const val SABAFON_BASE = "https://ana2.sabafon.net.ye:20005"
-        private const val SABAFON_MIN_PACING_MS = 1600L
+        private const val SABAFON_MIN_PACING_MS = 2400L
     }
 }

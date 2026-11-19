@@ -40,6 +40,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -85,12 +86,14 @@ fun QueryScreen(
     sabafonBalancePath: String,
     sabafonPackagesPath: String,
     diagnosticLog: String,
+    isDiscoveringRoutes: Boolean,
     onPhoneChanged: (String) -> Unit,
     onQueryClick: () -> Unit,
     onVersionTap: () -> Unit,
     onToggleDemoMode: (Boolean) -> Unit,
     onSaveDeveloperPaths: (String, String, String) -> Unit,
     onResetDeveloperPaths: () -> Unit,
+    onDiscoverSabafonRoutes: () -> Unit,
     onCopyDiagnosticLog: (String) -> Unit,
     onDismissDeveloperDialog: () -> Unit,
     modifier: Modifier = Modifier
@@ -355,9 +358,11 @@ fun QueryScreen(
             sabafonBalancePath = sabafonBalancePath,
             sabafonPackagesPath = sabafonPackagesPath,
             diagnosticLog = diagnosticLog,
+            isDiscoveringRoutes = isDiscoveringRoutes,
             onToggleDemoMode = onToggleDemoMode,
             onSavePaths = onSaveDeveloperPaths,
             onResetPaths = onResetDeveloperPaths,
+            onDiscoverSabafonRoutes = onDiscoverSabafonRoutes,
             onCopyDiagnosticLog = onCopyDiagnosticLog,
             onDismiss = onDismissDeveloperDialog
         )
@@ -391,9 +396,11 @@ private fun DeveloperOptionsDialog(
     sabafonBalancePath: String,
     sabafonPackagesPath: String,
     diagnosticLog: String,
+    isDiscoveringRoutes: Boolean,
     onToggleDemoMode: (Boolean) -> Unit,
     onSavePaths: (String, String, String) -> Unit,
     onResetPaths: () -> Unit,
+    onDiscoverSabafonRoutes: () -> Unit,
     onCopyDiagnosticLog: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -447,6 +454,26 @@ private fun DeveloperOptionsDialog(
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary
                 )
+
+                OutlinedButton(
+                    onClick = onDiscoverSabafonRoutes,
+                    enabled = !isDiscoveringRoutes,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("discover_sabafon_routes_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (isDiscoveringRoutes) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("جاري فحص مسارات سبأفون...")
+                    } else {
+                        Text("اكتشاف مسارات سبأفون تلقائياً")
+                    }
+                }
 
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -240,13 +240,15 @@ private fun BalanceAppRoot(viewModel: BalanceViewModel) {
                         sabafonVerifyPath = viewModel.sabafonVerifyPath,
                         sabafonBalancePath = viewModel.sabafonBalancePath,
                         sabafonPackagesPath = viewModel.sabafonPackagesPath,
-                        diagnosticLog = viewModel.getDiagnosticLog(),
+                        diagnosticLog = viewModel.diagnosticLogText,
+                        isDiscoveringRoutes = viewModel.isDiscoveringRoutes,
                         onPhoneChanged = viewModel::updatePhoneInput,
                         onQueryClick = viewModel::submitPhoneInquiry,
                         onVersionTap = viewModel::onVersionTapped,
                         onToggleDemoMode = viewModel::setDemoModeEnabled,
                         onSaveDeveloperPaths = viewModel::saveSabafonDeveloperPaths,
                         onResetDeveloperPaths = viewModel::resetSabafonDeveloperPaths,
+                        onDiscoverSabafonRoutes = viewModel::runSabafonEndpointDiscovery,
                         onCopyDiagnosticLog = { logText ->
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             cm?.setPrimaryClip(ClipData.newPlainText("diagnostic_log", logText))

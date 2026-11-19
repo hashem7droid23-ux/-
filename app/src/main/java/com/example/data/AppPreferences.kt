@@ -32,10 +32,14 @@ class AppPreferences(context: Context) {
     }
 
     fun getSabafonVerifyPath(): String {
-        return prefs.getString(
-            KEY_SABAFON_VERIFY_PATH,
-            DEFAULT_SABAFON_VERIFY_PATH
-        ).orEmpty().ifBlank { DEFAULT_SABAFON_VERIFY_PATH }
+        val saved = prefs.getString(KEY_SABAFON_VERIFY_PATH, DEFAULT_SABAFON_VERIFY_PATH)
+            .orEmpty()
+            .trim()
+        // Auto-migrate previously known 404 path to ASP.NET Authenticate/Login
+        if (saved.isBlank() || saved.equals("/ana-sabafon-api-auth/Authenticate/VerifyOtp", ignoreCase = true)) {
+            return DEFAULT_SABAFON_VERIFY_PATH
+        }
+        return saved
     }
 
     fun setSabafonVerifyPath(path: String) {
@@ -72,7 +76,7 @@ class AppPreferences(context: Context) {
         private const val KEY_SABAFON_BALANCE_PATH = "sabafon_balance_path"
         private const val KEY_SABAFON_PACKAGES_PATH = "sabafon_packages_path"
 
-        const val DEFAULT_SABAFON_VERIFY_PATH = "/ana-sabafon-api-auth/Authenticate/VerifyOtp"
+        const val DEFAULT_SABAFON_VERIFY_PATH = "/ana-sabafon-api-auth/Authenticate/Login"
         const val DEFAULT_SABAFON_BALANCE_PATH = "/ana-sabafon-api-subscriber/Subscriber/GetBalance"
         const val DEFAULT_SABAFON_PACKAGES_PATH = "/ana-sabafon-api-subscriber/Subscriber/GetActivePackages"
     }

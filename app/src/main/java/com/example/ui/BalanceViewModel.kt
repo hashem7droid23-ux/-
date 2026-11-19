@@ -72,6 +72,12 @@ class BalanceViewModel(
     var sabafonPackagesPath by mutableStateOf(prefs.getSabafonPackagesPath())
         private set
 
+    var isDiscoveringRoutes by mutableStateOf(false)
+        private set
+
+    var diagnosticLogText by mutableStateOf(apiClient.lastDiagnosticLog)
+        private set
+
     private var versionTapCount = 0
     private var lastVersionTapMillis = 0L
     private var lastAutoVerifiedOtp = ""
@@ -107,7 +113,12 @@ class BalanceViewModel(
         super.onCleared()
     }
 
-    fun getDiagnosticLog(): String = apiClient.lastDiagnosticLog
+    private fun syncDeveloperState() {
+        sabafonVerifyPath = prefs.getSabafonVerifyPath()
+        sabafonBalancePath = prefs.getSabafonBalancePath()
+        sabafonPackagesPath = prefs.getSabafonPackagesPath()
+        diagnosticLogText = apiClient.lastDiagnosticLog
+    }
 
     fun toggleDarkTheme() {
         val next = !isDarkTheme
@@ -124,6 +135,7 @@ class BalanceViewModel(
         versionTapCount++
         if (versionTapCount >= 5) {
             versionTapCount = 0
+            syncDeveloperState()
             showDeveloperDialog = true
         }
     }
@@ -158,6 +170,27 @@ class BalanceViewModel(
             AppPreferences.DEFAULT_SABAFON_BALANCE_PATH,
             AppPreferences.DEFAULT_SABAFON_PACKAGES_PATH
         )
+    }
+
+    fun runSabafonEndpointDiscovery() {
+        if (isDiscoveringRoutes) return
+        isDiscoveringRoutes = true
+        viewModelScope.launch {
+            val foundPath = withContext(Dispatchers.IO) {
+                apiClient.discoverSabafonEndpoints { liveLog ->
+                    viewModelScope.launch(Dispatchers.Main) {
+                        diagnosticLogText = liveLog
+                    }
+                }
+            }
+            syncDeveloperState()
+            isDiscoveringRoutes = false
+            infoMessage = if (foundPath.isNotBlank()) {
+                "تم اكتشاف مسار سبأفون وضبطه تلقائياً"
+            } else {
+                "انتهى الفحص — راجع سجل التشخيص لمعرفة رد الخادم"
+            }
+        }
     }
 
     fun updatePhoneInput(raw: String) {
@@ -209,6 +242,7 @@ class BalanceViewModel(
                 apiClient.startInquiry(cleanPhone, carrier)
             }
 
+            syncDeveloperState()
             isLoading = false
             when (outcome) {
                 is InquiryStartOutcome.NeedsOtp -> {
@@ -254,6 +288,7 @@ class BalanceViewModel(
                 apiClient.verifyOtpAndFetch(cleanPhone, carrier, cleanOtp)
             }
 
+            syncDeveloperState()
             isLoading = false
             when (outcome) {
                 is InquiryFetchOutcome.Success -> {
@@ -292,6 +327,7 @@ class BalanceViewModel(
                 apiClient.startInquiry(cleanPhone, carrier)
             }
 
+            syncDeveloperState()
             isLoading = false
             when (outcome) {
                 is InquiryStartOutcome.NeedsOtp -> {
@@ -342,6 +378,7 @@ class BalanceViewModel(
                 apiClient.refreshBalance(current.phoneNumber, current.carrier)
             }
 
+            syncDeveloperState()
             isLoading = false
             when (outcome) {
                 is InquiryFetchOutcome.Success -> {
