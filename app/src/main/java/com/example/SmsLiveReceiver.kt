@@ -6,46 +6,87 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.provider.Telephony
+import com.example.data.CarrierType
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.regex.Pattern
+
+fun interface OtpSmsListener {
+    fun onOtpCodeReceived(code: String)
+}
+
+object OtpSmsBridge {
+    private val listeners = CopyOnWriteArrayList<OtpSmsListener>()
+
+    fun register(listener: OtpSmsListener) {
+        if (!listeners.contains(listener)) {
+            listeners.add(listener)
+        }
+    }
+
+    fun unregister(listener: OtpSmsListener) {
+        listeners.remove(listener)
+    }
+
+    fun dispatchOtp(code: String) {
+        for (listener in listeners) {
+            try {
+                listener.onOtpCodeReceived(code)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    fun extractOtpCode(rawMessage: String): String? {
+        val normalized = StringBuilder(rawMessage.length).apply {
+            for (ch in rawMessage) {
+                when (ch) {
+                    in '٠'..'٩' -> append((ch - '٠' + '0'.code).toChar())
+                    in '۰'..'۹' -> append((ch - '۰' + '0'.code).toChar())
+                    else -> append(ch)
+                }
+            }
+        }.toString()
+
+        val patterns = listOf(
+            Pattern.compile("(?:رمز|كود|التحقق|تفعيل|code|otp|pin|verify)[^0-9]{0,20}\\b(\\d{4,8})\\b", Pattern.CASE_INSENSITIVE),
+            Pattern.compile("\\b(\\d{4,6})\\b")
+        )
+        for (pattern in patterns) {
+            val matcher = pattern.matcher(normalized)
+            if (matcher.find()) {
+                val found = matcher.group(1)
+                if (!found.isNullOrBlank()) {
+                    return found
+                }
+            }
+        }
+        return null
+    }
+}
 
 /**
- * Real Android BroadcastReceiver that intercepts live incoming SMS messages
- * from Yemen Mobile (181, 121), Sabafon (211), YOU (111), Yemen Net (114), or OTP gateways.
+ * Listens passively to incoming SMS verification codes on Screen 2
+ * so the OTP is filled automatically when RECEIVE_SMS permission is granted.
  */
 class SmsLiveReceiver : BroadcastReceiver() {
-
     override fun onReceive(context: Context?, intent: Intent?) {
         if (intent?.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
-
         try {
             val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
             if (messages.isNullOrEmpty()) return
 
-            // Group multi-part SMS messages by originating sender address
-            val groupedBySender = LinkedHashMap<String, StringBuilder>()
-            var timestamp = System.currentTimeMillis()
-
-            for (sms in messages) {
-                if (sms == null) continue
-                val sender = sms.displayOriginatingAddress ?: sms.originatingAddress ?: "الشبكة"
-                val bodyPart = sms.displayMessageBody ?: sms.messageBody ?: ""
-                if (sms.timestampMillis > 0) {
-                    timestamp = sms.timestampMillis
+            val fullBody = buildString {
+                for (sms in messages) {
+                    append(sms?.displayMessageBody ?: sms?.messageBody ?: "")
                 }
-                val builder = groupedBySender.getOrPut(sender) { StringBuilder() }
-                builder.append(bodyPart)
-            }
+            }.trim()
 
-            val mainHandler = Handler(Looper.getMainLooper())
-            for ((sender, fullBodyBuilder) in groupedBySender) {
-                val fullText = fullBodyBuilder.toString().trim()
-                if (fullText.isNotEmpty()) {
-                    mainHandler.post {
-                        RealTelecomEngine.notifyRealIncomingSms(
-                            sender = sender,
-                            body = fullText,
-                            timestampMillis = timestamp
-                        )
-                    }
+            if (fullBody.isEmpty()) return
+
+            val otp = OtpSmsBridge.extractOtpCode(fullBody)
+            if (!otp.isNullOrBlank()) {
+                Handler(Looper.getMainLooper()).post {
+                    OtpSmsBridge.dispatchOtp(otp)
                 }
             }
         } catch (_: Throwable) {
